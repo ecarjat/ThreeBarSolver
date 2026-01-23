@@ -1,0 +1,360 @@
+import math
+
+# ============================================================
+# 1) Basic 2D geometry helpers
+# ============================================================
+
+def orientation(ax, ay, bx, by, cx, cy):
+    """2D orientation (cross product z-component) of (A->B) x (A->C)."""
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+
+
+def on_segment(ax, ay, bx, by, px, py, eps=1e-9):
+    """Check if P lies on segment AB (including endpoints), within eps."""
+    if min(ax, bx) - eps <= px <= max(ax, bx) + eps and \
+       min(ay, by) - eps <= py <= max(ay, by) + eps:
+        # colinear check via area ~ 0
+        return abs(orientation(ax, ay, bx, by, px, py)) < eps
+    return False
+
+
+def segments_intersect_strict(p1, p2, p3, p4, eps=1e-9):
+    """
+    Proper segment intersection test (excluding pure endpoint touching).
+    Returns True if segments p1p2 and p3p4 intersect in their interiors.
+    """
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    x4, y4 = p4
+
+    o1 = orientation(x1, y1, x2, y2, x3, y3)
+    o2 = orientation(x1, y1, x2, y2, x4, y4)
+    o3 = orientation(x3, y3, x4, y4, x1, y1)
+    o4 = orientation(x3, y3, x4, y4, x2, y2)
+
+    # General proper intersection (different sides)
+    if o1 * o2 < -eps and o3 * o4 < -eps:
+        return True
+
+    # Colinear / touching cases: treat as collision only if strictly inside both segments,
+    # but we EXCLUDE pure joint sharing (endpoints).
+    if abs(o1) < eps and on_segment(x1, y1, x2, y2, x3, y3, eps):
+        if (x3, y3) != (x1, y1) and (x3, y3) != (x2, y2):
+            return True
+    if abs(o2) < eps and on_segment(x1, y1, x2, y2, x4, y4, eps):
+        if (x4, y4) != (x1, y1) and (x4, y4) != (x2, y2):
+            return True
+    if abs(o3) < eps and on_segment(x3, y3, x4, y4, x1, y1, eps):
+        if (x1, y1) != (x3, y3) and (x1, y1) != (x4, y4):
+            return True
+    if abs(o4) < eps and on_segment(x3, y3, x4, y4, x2, y2, eps):
+        if (x2, y2) != (x3, y3) and (x2, y2) != (x4, y4):
+            return True
+
+    return False
+
+
+# ============================================================
+# 2) Core leg geometry with NO CROSSINGS
+# ============================================================
+
+def solve_leg_geometry(theta_deg, L_wk, L_kc, L_u, L_b, L_c):
+    """
+    Solve the leg + body geometry at a given lower-leg angle θ (deg),
+    with collision-free constraint between upper leg and connector.
+
+    Geometry:
+      - W: wheel at (0, 0)
+      - Lower leg: W -> K -> C colinear at angle θ
+      - |W->K|    = L_wk
+      - |K->C|    = L_kc
+      - Upper leg: K -> Bf, |K->Bf| = L_u
+      - Body: Bf -> Br, horizontal, |Bf->Br| = L_b
+      - Connector: C -> Br, |C->Br| = L_c
+      - Body must stay parallel to ground (Bf.y == Br.y).
+      - No intersection between segments (K,Bf) and (C,Br) in their interiors.
+
+    Returns:
+        (W, K, C, Bf, Br) as 2D points (x, y),
+        or None if no collision-free configuration exists for this θ.
+    """
+    theta = math.radians(theta_deg)
+    ux, uy = math.cos(theta), math.sin(theta)
+
+    # Wheel on flat ground
+    W = (0.0, 0.0)
+    Wx, Wy = W
+
+    # Knee
+    Kx, Ky = L_wk * ux, L_wk * uy
+    K = (Kx, Ky)
+
+    # Connector attach on lower leg
+    Cx, Cy = (L_wk + L_kc) * ux, (L_wk + L_kc) * uy
+    C = (Cx, Cy)
+
+    # For body: Bf = (x_f, y_f), Br = (x_f - L_b, y_f)
+    # Constraint |C->Br| = L_c can be seen as Bf lying on circle
+    # centered at C' = (Cx + L_b, Cy) with radius L_c.
+    Cpx, Cpy = Cx + L_b, Cy
+
+    # Circle intersection: center1 = K, r1 = L_u; center2 = C', r2 = L_c
+    dx, dy = Cpx - Kx, Cpy - Ky
+    d = math.hypot(dx, dy)
+
+    # Feasibility: circles must intersect
+    if d > L_u + L_c or d < abs(L_u - L_c) or d == 0.0:
+        return None
+
+    # Circle-circle intersection formula
+    a = (L_u**2 - L_c**2 + d**2) / (2.0 * d)
+    h_sq = L_u**2 - a**2
+    if h_sq < 0:
+        h_sq = 0.0
+    h = math.sqrt(h_sq)
+
+    # Base point along line from K to C'
+    x2 = Kx + a * (Cpx - Kx) / d
+    y2 = Ky + a * (Cpy - Ky) / d
+
+    # Perpendicular offset (two intersection points)
+    rx = -(Cpy - Ky) * (h / d)
+    ry =  (Cpx - Kx) * (h / d)
+
+    Bf_candidates = [
+        (x2 + rx, y2 + ry),
+        (x2 - rx, y2 - ry),
+    ]
+
+    best = None
+    best_y = -1e9
+
+    for Bf in Bf_candidates:
+        Bfx, Bfy = Bf
+        # Body rear Br (body horizontal, length L_b)
+        Brx, Bry = Bfx - L_b, Bfy
+        Br = (Brx, Bry)
+
+        # Collision check: upper leg (K,Bf) vs connector (C,Br)
+        if segments_intersect_strict(K, Bf, C, Br):
+            continue  # reject this candidate
+
+        # Prefer higher body (larger y)
+        if Bfy > best_y:
+            best_y = Bfy
+            best = (W, K, C, Bf, Br)
+
+    return best  # None if both candidates collide or no intersection
+
+
+# ============================================================
+# 3) Design evaluation: cost over θ range
+# ============================================================
+
+def evaluate_design(L_wk, L_kc, L_u, L_b, L_c,
+                    theta_min=40, theta_max=75, theta_step=5,
+                    target_height=200.0):
+    """
+    Evaluate a design over the full θ range:
+      - Must have a valid collision-free solution for ALL θ.
+      - Computes:
+          * max horizontal offset of body COM vs wheel
+          * max body height (at Bf/Br)
+          * knee angles
+      - Combines into a scalar cost.
+
+    Returns:
+        (cost, metrics_dict) or (None, None) if infeasible.
+    """
+    max_offset = 0.0    # max |body_COM_x - wheel_x|
+    max_height = 0.0    # max body height (y at Bf/Br)
+    max_knee_penalty = 0.0
+
+    for th in range(theta_min, theta_max + 1, theta_step):
+        sol = solve_leg_geometry(th, L_wk, L_kc, L_u, L_b, L_c)
+        if sol is None:
+            return None, None  # infeasible for this θ
+
+        W, K, C, Bf, Br = sol
+        Wx, Wy = W
+        Kx, Ky = K
+        Cx, Cy = C
+        Bfx, Bfy = Bf
+        Brx, Bry = Br
+        
+        metrics_local = {}
+        # Keep track of minimum vertical clearance of body above leg
+        if "min_body_above_leg" not in metrics_local:
+            metrics_local["min_body_above_leg"] = float("inf")
+
+        # Require body front to be above both knee and connector
+        clearance = min(Bfy - Ky, Bfy - Cy)
+        if clearance < metrics_local["min_body_above_leg"]:
+            metrics_local["min_body_above_leg"] = clearance
+
+        # 1) Body COM horizontal offset from wheel (torque proxy)
+        x_body_com = 0.5 * (Bfx + Brx)
+        offset = abs(x_body_com - Wx)
+        if offset > max_offset:
+            max_offset = offset
+
+        # 2) Body height
+        if Bfy > max_height:
+            max_height = Bfy
+
+        # 3) Knee angle between upper leg and lower leg (avoid very acute / obtuse)
+        # lower leg from K to W
+        vx_l, vy_l = Wx - Kx, Wy - Ky
+        # upper leg from K to Bf
+        vx_u, vy_u = Bfx - Kx, Bfy - Ky
+
+        dl = math.hypot(vx_l, vy_l)
+        du = math.hypot(vx_u, vy_u)
+        if dl == 0 or du == 0:
+            return None, None
+
+        cosang = (vx_l * vx_u + vy_l * vy_u) / (dl * du)
+        cosang = max(-1.0, min(1.0, cosang))
+        ang = math.degrees(math.acos(cosang))
+
+        # Penalise knee angle outside [60°, 120°]
+        penalty = 0.0
+        if ang < 60.0:
+            penalty += 60.0 - ang
+        if ang > 120.0:
+            penalty += ang - 120.0
+
+        if penalty > max_knee_penalty:
+            max_knee_penalty = penalty
+
+    # --- Cost components ---
+
+    # 1) Body COM offset cost:
+    #    keep body roughly above wheel (few tens of mm)
+    com_cost = max_offset / 50.0   # 50 mm offset -> cost 1
+
+    # 2) Height cost:
+    #    want max body height ~ target_height (e.g. 200 mm)
+    height_cost = abs(max_height - target_height) / target_height
+
+    # 3) Knee angle penalty
+    knee_cost = max_knee_penalty / 30.0  # 30° violation -> cost 1
+
+    # Combine with weights
+    w_com    = 2.0
+    w_height = 6.0
+    w_knee   = 1.0
+    
+    min_clearance = metrics_local["min_body_above_leg"]
+
+    if min_clearance < 0:
+        # Very expensive design, effectively rejected
+        clearance_cost = 100.0
+    else:
+            # Small penalty if clearance is tiny (to avoid grazing)
+            clearance_cost = 5.0 / (min_clearance + 1.0)  # 1 mm -> ~5, 10 mm -> ~0.45
+
+    # And then:
+    cost = w_com * com_cost + w_height * height_cost + w_knee * knee_cost + clearance_cost
+
+    metrics = {
+        "max_offset": max_offset,
+        "max_height": max_height,
+        "max_knee_penalty_deg": max_knee_penalty,
+        "com_cost": com_cost,
+        "height_cost": height_cost,
+        "knee_cost": knee_cost,
+    }
+    return cost, metrics
+
+
+# ============================================================
+# 4) Search layer:
+#    - Valid for all θ
+#    - Body COM close to wheel
+#    - Max height ≈ 200 mm
+#    - Lu ≈ L_kc
+# ============================================================
+
+def search_designs():
+    """
+    Brute-force search over a coarse grid of lengths.
+    You should tune the ranges based on your packaging constraints.
+
+    Returns:
+        (best_params, best_total_cost, best_metrics)
+        where best_params is a dict.
+    """
+    best_total_cost = None
+    best_params = None
+    best_metrics = None
+
+    # -------------------------
+    # RANGES TO TUNE
+    # -------------------------
+    # These are coarse; shrink them once you see what looks reasonable.
+    L_wk_range  = range(80, 120, 10)   # W->K (wheel to knee)
+    L_kc_range  = range(40, 150, 10)   # K->C (knee to connector)
+    L_u_range   = range(80, 120, 10)   # K->Bf (upper leg)
+    L_b_range   = range(20, 70, 10)   # Bf->Br (body length)
+    L_c_range   = range(20, 150, 10)   # C->Br (connector)
+
+    target_height = 200.0  # mm, max body height we want roughly
+
+    for L_wk in L_wk_range:
+        for L_kc in L_kc_range:
+            for L_u in L_u_range:
+                for L_b in L_b_range:
+                    for L_c in L_c_range:
+                        if L_u <= L_c:
+                            continue
+                        # Soft constraint: Lu ≈ L_kc (you want them close)
+                        # We'll add this as an extra cost term rather than hard reject.
+                        base_cost, metrics = evaluate_design(
+                            L_wk, L_kc, L_u, L_b, L_c,
+                            theta_min=40, theta_max=75, theta_step=1,
+                            target_height=target_height,
+                        )
+                        if base_cost is None:
+                            continue  # infeasible over θ range
+
+                        # Extra term: similarity of L_u and L_kc
+                        # 0 when equal, ~1 when differ by ~50 mm.
+                        # leg_match_cost = abs(L_u - L_kc) / 50.0
+
+                        # total_cost = base_cost + leg_match_cost
+                        total_cost = base_cost
+
+                        if best_total_cost is None or total_cost < best_total_cost:
+                            best_total_cost = total_cost
+                            best_params = {
+                                "L_wk": L_wk,
+                                "L_kc": L_kc,
+                                "L_u":  L_u,
+                                "L_b":  L_b,
+                                "L_c":  L_c,
+                            }
+                            best_metrics = metrics | {
+                                # "leg_match_cost": leg_match_cost,
+                                "total_cost": total_cost,
+                            }
+
+    return best_params, best_total_cost, best_metrics
+
+
+# ============================================================
+# 5) Demo
+# ============================================================
+
+if __name__ == "__main__":
+    params, total_cost, metrics = search_designs()
+    if params is None:
+        print("No feasible design found in the tested ranges.")
+    else:
+        print("Best design found:")
+        for k, v in params.items():
+            print(f"  {k} = {v} mm")
+        print("\nMetrics:")
+        for k, v in metrics.items():
+            print(f"  {k}: {v:.3f}")

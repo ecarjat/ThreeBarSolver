@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "robot2wheel-utils"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [
+    { include = "robot2wheel_utils" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.12"
+matplotlib = "^3.8"
+numpy = "^1.26"
+scipy = "^1.12"
+
+[tool.poetry.scripts]
+motion = "robot2wheel_utils.run:main"
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
