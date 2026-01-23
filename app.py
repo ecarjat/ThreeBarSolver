@@ -24,6 +24,91 @@ st.title(
 def mm_to_m(val_mm: float) -> float:
     return float(val_mm) / 1000.0
 
+
+def m_to_mm(val_m: float) -> float:
+    return float(val_m) * 1000.0
+
+
+def _scale_point_mm(pt: dict) -> dict:
+    return {"x": m_to_mm(pt["x"]), "y": m_to_mm(pt["y"])}
+
+
+def sevenbar_to_mm(sol: dict | None) -> dict | None:
+    if sol is None:
+        return None
+    out = dict(sol)
+    if "Hext" in out:
+        out["Hext"] = m_to_mm(out["Hext"])
+    if "ax1_fixed" in out:
+        out["ax1_fixed"] = m_to_mm(out["ax1_fixed"])
+    if "lengths" in out:
+        out["lengths"] = {k: m_to_mm(v) for k, v in out["lengths"].items()}
+    if "poses" in out:
+        poses_mm = {}
+        for key, pose in out["poses"].items():
+            pose_mm = dict(pose)
+            if "points" in pose:
+                pose_mm["points"] = {
+                    pkey: _scale_point_mm(pval) for pkey, pval in pose["points"].items()
+                }
+            if "wheel_midpoint" in pose:
+                pose_mm["wheel_midpoint"] = _scale_point_mm(pose["wheel_midpoint"])
+            poses_mm[key] = pose_mm
+        out["poses"] = poses_mm
+    if "quality" in out and isinstance(out["quality"], dict):
+        quality = dict(out["quality"])
+        if "max_wheel_x_drift" in quality:
+            quality["max_wheel_x_drift"] = m_to_mm(quality["max_wheel_x_drift"])
+        out["quality"] = quality
+    return out
+
+
+def threebar_to_mm(sol: dict | None) -> dict | None:
+    if sol is None:
+        return None
+    out = dict(sol)
+    if "Hcrouch" in out:
+        out["Hcrouch"] = m_to_mm(out["Hcrouch"])
+    if "Hext" in out:
+        out["Hext"] = m_to_mm(out["Hext"])
+    if "lengths" in out:
+        out["lengths"] = {k: m_to_mm(v) for k, v in out["lengths"].items()}
+    if "pin_joint" in out:
+        out["pin_joint"] = _scale_point_mm(out["pin_joint"])
+    if "inner_joint_offset_KC" in out:
+        out["inner_joint_offset_KC"] = m_to_mm(out["inner_joint_offset_KC"])
+    if "jump_report" in out and isinstance(out["jump_report"], dict):
+        jr = dict(out["jump_report"])
+        for key in ("J_min", "J_max", "J_start", "J_end", "y_dot_takeoff_est"):
+            if key in jr:
+                jr[key] = m_to_mm(jr[key])
+        out["jump_report"] = jr
+    if "poses" in out:
+        poses_mm = {}
+        for key, pose in out["poses"].items():
+            pose_mm = dict(pose)
+            if "target_wheel_y" in pose_mm:
+                pose_mm["target_wheel_y"] = m_to_mm(pose_mm["target_wheel_y"])
+            if "points" in pose:
+                pose_mm["points"] = {
+                    pkey: _scale_point_mm(pval) for pkey, pval in pose["points"].items()
+                }
+            poses_mm[key] = pose_mm
+        out["poses"] = poses_mm
+    if "quality" in out and isinstance(out["quality"], dict):
+        quality = dict(out["quality"])
+        for key in (
+            "max_wheel_x",
+            "wheel_x_pp",
+            "wheel_x_rms",
+            "wheel_y_span",
+            "mean_wheel_x",
+        ):
+            if key in quality:
+                quality[key] = m_to_mm(quality[key])
+        out["quality"] = quality
+    return out
+
 # ---------------------------
 # State
 # ---------------------------
@@ -117,7 +202,7 @@ if mode == "7-bar":
         if st.session_state.design_7bar is None:
             st.info("Click **Solve design** to compute shared lengths + poses.")
         else:
-            st.json(st.session_state.design_7bar)
+            st.json(sevenbar_to_mm(st.session_state.design_7bar))
 
     with right:
         st.subheader("Animation: DR rotates about point 3")
@@ -137,9 +222,13 @@ if mode == "7-bar":
             col1, col2 = st.columns([2, 1])
 
             with col1:
+                pose_mm = sevenbar_to_mm({"poses": {"0.0": pose}})
+                pose_display = pose_mm["poses"]["0.0"] if pose_mm else pose
                 fig = plt.figure()
                 ax = fig.add_subplot(111)
-                plot_pose_matplotlib(ax, pose, title=f"θ={theta_deg:.1f}°")
+                plot_pose_matplotlib(ax, pose_display, title=f"θ={theta_deg:.1f}°")
+                ax.set_xlabel("x (mm)")
+                ax.set_ylabel("y (mm) (+Y down)")
                 st.pyplot(fig)
                 plt.close(fig)
 
@@ -267,7 +356,7 @@ else:
         if st.session_state.design_3bar is None:
             st.info("Click **Solve 3-bar design** to compute lengths + poses.")
         else:
-            st.json(st.session_state.design_3bar)
+            st.json(threebar_to_mm(st.session_state.design_3bar))
 
     with right:
         st.subheader("Mechanism pose")
@@ -294,11 +383,11 @@ else:
                 st.warning("Crossing detected at this pose ratio.")
 
             pts = pose["points"]
-            H = np.array([pts["H"]["x"], pts["H"]["y"]], dtype=float)
-            K = np.array([pts["K"]["x"], pts["K"]["y"]], dtype=float)
-            C = np.array([pts["C"]["x"], pts["C"]["y"]], dtype=float)
-            W = np.array([pts["W"]["x"], pts["W"]["y"]], dtype=float)
-            Bc = np.array([pts["Bc"]["x"], pts["Bc"]["y"]], dtype=float)
+            H = np.array([pts["H"]["x"], pts["H"]["y"]], dtype=float) * 1000.0
+            K = np.array([pts["K"]["x"], pts["K"]["y"]], dtype=float) * 1000.0
+            C = np.array([pts["C"]["x"], pts["C"]["y"]], dtype=float) * 1000.0
+            W = np.array([pts["W"]["x"], pts["W"]["y"]], dtype=float) * 1000.0
+            Bc = np.array([pts["Bc"]["x"], pts["Bc"]["y"]], dtype=float) * 1000.0
 
             pose_cols = st.columns([2, 1])
             with pose_cols[0]:
@@ -318,15 +407,15 @@ else:
 
                 ax.set_aspect("equal", adjustable="box")
                 ax.grid(True)
-                ax.set_xlabel("x (m)")
-                ax.set_ylabel("y (m) (+Y down)")
+                ax.set_xlabel("x (mm)")
+                ax.set_ylabel("y (mm) (+Y down)")
                 ax.invert_yaxis()
                 st.pyplot(fig, use_container_width=False)
                 plt.close(fig)
 
             with pose_cols[1]:
                 st.subheader("Pose coordinates")
-                poses = st.session_state.design_3bar.get("poses", {})
+                poses = threebar_to_mm(st.session_state.design_3bar).get("poses", {})
                 keys = sorted(poses.keys(), key=float) if poses else []
                 if poses:
                     rows = []
@@ -335,10 +424,10 @@ else:
                         rows.append(
                             {
                                 "ratio": float(key),
-                                "Bc": f"({points['Bc']['x']:.4f}, {points['Bc']['y']:.4f})",
-                                "C": f"({points['C']['x']:.4f}, {points['C']['y']:.4f})",
-                                "K": f"({points['K']['x']:.4f}, {points['K']['y']:.4f})",
-                                "W": f"({points['W']['x']:.4f}, {points['W']['y']:.4f})",
+                                "Bc (mm)": f"({points['Bc']['x']:.3f}, {points['Bc']['y']:.3f})",
+                                "C (mm)": f"({points['C']['x']:.3f}, {points['C']['y']:.3f})",
+                                "K (mm)": f"({points['K']['x']:.3f}, {points['K']['y']:.3f})",
+                                "W (mm)": f"({points['W']['x']:.3f}, {points['W']['y']:.3f})",
                             }
                         )
                     st.table(rows)
@@ -346,4 +435,4 @@ else:
                     st.info("No pose coordinate data available.")
 
             st.write("Quality metrics:")
-            st.write(st.session_state.design_3bar.get("quality", {}))
+            st.write(threebar_to_mm(st.session_state.design_3bar).get("quality", {}))
