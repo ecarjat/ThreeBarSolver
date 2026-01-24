@@ -4,9 +4,11 @@ use crate::types::Point2D;
 use nalgebra::Vector2;
 
 /// Compute wheel position from knee and inner joint
+/// The lower leg bar has three collinear points: W --- K --- C
+/// K is in the middle, W and C are on opposite ends
 /// W = K - normalize(C - K) * Lkw
 pub fn compute_wheel(knee: &Point2D, inner: &Point2D, lk_wheel: f64) -> Point2D {
-    let v = inner - knee;
+    let v = inner - knee; // direction from K toward C
     let n = v.norm();
 
     if n < 1e-9 {
@@ -15,7 +17,7 @@ pub fn compute_wheel(knee: &Point2D, inner: &Point2D, lk_wheel: f64) -> Point2D 
     }
 
     let u = v / n;
-    knee - u * lk_wheel
+    knee - u * lk_wheel // W is opposite direction from C
 }
 
 /// Map raw (xbc, ybc) parameters to Bc point with optional radius constraint
@@ -62,12 +64,16 @@ mod tests {
     #[test]
     fn test_compute_wheel() {
         let knee = Vector2::new(0.0, 0.3);
-        let inner = Vector2::new(0.0, 0.5);
+        let inner = Vector2::new(0.0, 0.5); // C is below K (+Y is down)
         let lkw = 0.2;
         let wheel = compute_wheel(&knee, &inner, lkw);
 
-        // Wheel should be opposite direction of inner from knee
+        // Bar order: W --- K --- C
+        // W is opposite direction from C relative to K
+        // Since C is below K (C.y > K.y), W should be above K (W.y < K.y)
         assert!(wheel.y < knee.y);
+        // Check distance K to W equals Lkw
+        assert!(((wheel - knee).norm() - lkw).abs() < 1e-10);
     }
 
     #[test]

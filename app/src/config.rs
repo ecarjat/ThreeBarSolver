@@ -1,4 +1,70 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// Current parameters file version
+/// Version history:
+/// - v1: Initial version
+/// - v2: Added weight controls to UI (weights were always in config, now user-editable)
+pub const PARAMS_VERSION: u32 = 2;
+
+/// Parameters file path
+pub const PARAMS_FILE: &str = "params.json";
+
+/// Versioned wrapper for serializing parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionedParams {
+    pub version: u32,
+    pub config: Config,
+}
+
+impl VersionedParams {
+    pub fn new(config: Config) -> Self {
+        Self {
+            version: PARAMS_VERSION,
+            config,
+        }
+    }
+
+    /// Migrate from an older version to the current version
+    /// Returns the migrated config or an error
+    pub fn migrate(json_value: Value) -> Result<Config, String> {
+        let version = json_value
+            .get("version")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1) as u32;
+
+        let config_value = json_value
+            .get("config")
+            .ok_or("Missing 'config' field in params.json")?;
+
+        match version {
+            1 => {
+                // v1 -> v2: No schema changes, weights already existed
+                // Just parse with defaults for any missing fields
+                let config: Config = serde_json::from_value(config_value.clone())
+                    .map_err(|e| format!("Failed to parse v1 config: {}", e))?;
+                eprintln!("Migrated params.json from v1 to v2");
+                Ok(config)
+            }
+            2 => {
+                // Current version, no migration needed
+                let config: Config = serde_json::from_value(config_value.clone())
+                    .map_err(|e| format!("Failed to parse v2 config: {}", e))?;
+                Ok(config)
+            }
+            _ => {
+                // Unknown future version - try to parse anyway
+                eprintln!(
+                    "Warning: params.json version {} is newer than supported version {}",
+                    version, PARAMS_VERSION
+                );
+                let config: Config = serde_json::from_value(config_value.clone())
+                    .map_err(|e| format!("Failed to parse config: {}", e))?;
+                Ok(config)
+            }
+        }
+    }
+}
 
 /// Configuration for the 3-bar linkage optimizer
 /// Maps directly from Python Config dataclass (~45 fields)

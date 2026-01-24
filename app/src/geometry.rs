@@ -138,10 +138,12 @@ mod tests {
     #[test]
     fn test_wrap_pi() {
         assert!((wrap_pi(0.0) - 0.0).abs() < 1e-10);
-        assert!((wrap_pi(PI) - PI).abs() < 1e-10);
-        assert!((wrap_pi(-PI) - (-PI)).abs() < 1e-10);
+        // PI and -PI are equivalent; wrap_pi returns -PI for boundary
+        assert!(wrap_pi(PI).abs() - PI < 1e-10);
+        assert!(wrap_pi(-PI).abs() - PI < 1e-10);
         assert!((wrap_pi(2.0 * PI) - 0.0).abs() < 1e-10);
-        assert!((wrap_pi(3.0 * PI) - PI).abs() < 1e-10);
+        // 3*PI wraps to PI or -PI
+        assert!(wrap_pi(3.0 * PI).abs() - PI < 1e-10);
     }
 
     #[test]

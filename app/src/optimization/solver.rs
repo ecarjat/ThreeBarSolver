@@ -3,7 +3,7 @@ use crate::geometry::{dist, segments_intersect_strict, wrap_pi};
 use crate::linkage::{bc_from_params, compute_wheel, has_crossing, height_for_ratio};
 use crate::optimization::bounds::build_bounds;
 use crate::optimization::packing::{pack_vars, unpack_vars};
-use crate::optimization::problem::{PoseProblem, ThreeBarProblem};
+use crate::optimization::problem::ThreeBarProblem;
 use crate::optimization::residuals::cost;
 use crate::types::*;
 use argmin::core::{Executor, IterState};
@@ -14,6 +14,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
+use std::f64::consts::PI;
 
 /// Generate initial seed for multi-start optimization
 pub fn generate_initial_seed(cfg: &Config, seed_idx: usize) -> Vec<f64> {
@@ -372,6 +373,73 @@ fn compute_jump_report(wheel_ys: &[f64], hip_thetas: &[f64], cfg: &Config) -> Ju
     }
 }
 
+fn circle_intersections(
+    c0: &Vector2<f64>,
+    r0: f64,
+    c1: &Vector2<f64>,
+    r1: f64,
+) -> Option<(Vector2<f64>, Vector2<f64>)> {
+    let d = dist(c0, c1);
+    if d <= 1e-12 {
+        return None;
+    }
+
+    if d > r0 + r1 + 1e-12 || d < (r0 - r1).abs() - 1e-12 {
+        return None;
+    }
+
+    let a = (r0 * r0 - r1 * r1 + d * d) / (2.0 * d);
+    let mut h_sq = r0 * r0 - a * a;
+    if h_sq < 0.0 {
+        if h_sq > -1e-12 {
+            h_sq = 0.0;
+        } else {
+            return None;
+        }
+    }
+    let h = h_sq.sqrt();
+
+    let p2 = c0 + a * (c1 - c0) / d;
+    let rx = -(c1.y - c0.y) * (h / d);
+    let ry = (c1.x - c0.x) * (h / d);
+
+    let p3 = Vector2::new(p2.x + rx, p2.y + ry);
+    let p4 = Vector2::new(p2.x - rx, p2.y - ry);
+
+    Some((p3, p4))
+}
+
+fn eval_pose_for_theta(
+    theta: f64,
+    bc: &Vector2<f64>,
+    lu: f64,
+    lkc: f64,
+    lc: f64,
+    lkw: f64,
+    target_y: f64,
+    preferred_c: Option<&Vector2<f64>>,
+) -> Option<(Vector2<f64>, Vector2<f64>, Vector2<f64>, f64)> {
+    let k = Vector2::new(lu * theta.cos(), lu * theta.sin());
+    let (c1, c2) = circle_intersections(&k, lkc, bc, lc)?;
+
+    let w1 = compute_wheel(&k, &c1, lkw);
+    let f1 = w1.y - target_y;
+    let w2 = compute_wheel(&k, &c2, lkw);
+    let f2 = w2.y - target_y;
+
+    let use_first = if let Some(pref) = preferred_c {
+        (c1 - pref).norm() <= (c2 - pref).norm()
+    } else {
+        f1.abs() <= f2.abs()
+    };
+
+    if use_first {
+        Some((k, c1, w1, f1))
+    } else {
+        Some((k, c2, w2, f2))
+    }
+}
+
 /// Solve for a single pose given fixed linkage parameters
 pub fn solve_pose_ratio(
     cfg: &Config,
@@ -389,86 +457,92 @@ pub fn solve_pose_ratio(
     let lc = lengths.link_bc_c;
     let target_y = height_for_ratio(cfg, ratio);
 
-    // Initial guess
-    let x0_vec = match x0 {
-        Some(seed) if seed.len() == 4 => seed.to_vec(),
-        _ => {
-            let kx = 0.0;
-            let ky = target_y * 0.6;
-            let cx = 0.1 * lu;
-            let cy = ky - 0.4 * lu;
-            vec![kx, ky, cx, cy]
+    let seed_kc = x0.and_then(|seed| {
+        if seed.len() == 4 {
+            Some((
+                Vector2::new(seed[0], seed[1]),
+                Vector2::new(seed[2], seed[3]),
+            ))
+        } else {
+            None
         }
-    };
+    });
+    let mut preferred_c = seed_kc.map(|(_, c)| c);
 
-    let problem = PoseProblem::new(cfg.clone(), bc, lu, lkc, lc, lkw, target_y);
+    let steps = 720;
+    let mut best: Option<(Vector2<f64>, Vector2<f64>, Vector2<f64>, f64)> = None;
+    let mut prev: Option<(f64, Vector2<f64>, f64)> = None;
+    let mut best_bracket: Option<(f64, f64, Vector2<f64>)> = None;
 
-    // Build simplex for Nelder-Mead
-    let simplex: Vec<Vec<f64>> = (0..=4)
-        .map(|i| {
-            let mut p = x0_vec.clone();
-            if i > 0 {
-                p[i - 1] += 0.01;
+    for i in 0..=steps {
+        let t = i as f64 / steps as f64;
+        let theta = -PI + 2.0 * PI * t;
+        if let Some((k, c, w, f)) =
+            eval_pose_for_theta(theta, &bc, lu, lkc, lc, lkw, target_y, preferred_c.as_ref())
+        {
+            if best
+                .as_ref()
+                .map(|(_, _, _, bf)| f.abs() < bf.abs())
+                .unwrap_or(true)
+            {
+                best = Some((k, c, w, f));
             }
-            p
-        })
-        .collect();
 
-    let solver = match NelderMead::new(simplex).with_sd_tolerance(1e-10) {
-        Ok(s) => s,
-        Err(_) => {
-            let cost = crate::optimization::residuals::pose_cost(
-                &x0_vec, cfg, &bc, lu, lkc, lc, lkw, target_y,
-            );
-            return PoseSolveResult {
-                success: false,
-                cost,
-                points: PosePoints {
-                    h: Vector2::new(0.0, 0.0),
-                    k: Vector2::new(x0_vec[0], x0_vec[1]),
-                    c: Vector2::new(x0_vec[2], x0_vec[3]),
-                    w: compute_wheel(
-                        &Vector2::new(x0_vec[0], x0_vec[1]),
-                        &Vector2::new(x0_vec[2], x0_vec[3]),
-                        lkw,
-                    ),
-                    bc,
-                },
-                crossing: false,
-                seed: x0_vec,
-            };
+            if let Some((prev_theta, prev_c, prev_f)) = prev.as_ref() {
+                if prev_f.signum() != f.signum() {
+                    best_bracket = Some((*prev_theta, theta, prev_c.clone()));
+                }
+            }
+
+            prev = Some((theta, c.clone(), f));
+            preferred_c = Some(c);
         }
-    };
+    }
 
-    let result = Executor::new(problem, solver)
-        .configure(|state: IterState<Vec<f64>, (), (), (), (), f64>| state.max_iters(20000))
-        .run();
+    let mut refined = None;
+    if let Some((mut lo, mut hi, mut pref_c)) = best_bracket {
+        let mut f_lo = eval_pose_for_theta(lo, &bc, lu, lkc, lc, lkw, target_y, Some(&pref_c))
+            .map(|(_, c, _, f)| {
+                pref_c = c;
+                f
+            })
+            .unwrap_or(0.0);
 
-    let (best, cost, success) = match result {
-        Ok(res) => {
-            let state: &IterState<Vec<f64>, (), (), (), (), f64> = res.state();
-            let best = state.best_param.clone().unwrap_or(x0_vec);
-            let cost = state.best_cost;
-            (best, cost, true)
+        for _ in 0..40 {
+            let mid = 0.5 * (lo + hi);
+            if let Some((k, c, w, f_mid)) =
+                eval_pose_for_theta(mid, &bc, lu, lkc, lc, lkw, target_y, Some(&pref_c))
+            {
+                if f_lo.signum() == f_mid.signum() {
+                    lo = mid;
+                    f_lo = f_mid;
+                } else {
+                    hi = mid;
+                }
+                pref_c = c;
+                refined = Some((k, c, w, f_mid));
+            } else {
+                break;
+            }
         }
-        Err(_) => {
-            let cost = crate::optimization::residuals::pose_cost(
-                &x0_vec, cfg, &bc, lu, lkc, lc, lkw, target_y,
-            );
-            (x0_vec, cost, false)
-        }
-    };
+    }
 
-    let k = Vector2::new(best[0], best[1]);
-    let c = Vector2::new(best[2], best[3]);
-    let w = compute_wheel(&k, &c, lkw);
+    let (k, c, w, f) = refined.or(best).unwrap_or((
+        Vector2::new(0.0, 0.0),
+        Vector2::new(0.0, 0.0),
+        Vector2::new(0.0, 0.0),
+        f64::INFINITY,
+    ));
+
     let crossing = segments_intersect_strict(&h, &k, &bc, &c, 1e-9);
+    let cost = f * f;
+    let success = f.is_finite() && f.abs() < 1e-4 && !crossing;
 
     PoseSolveResult {
-        success: success && !crossing,
+        success,
         cost,
         points: PosePoints { h, k, c, w, bc },
         crossing,
-        seed: best,
+        seed: vec![k.x, k.y, c.x, c.y],
     }
 }

@@ -1,7 +1,7 @@
 use crate::app::state::AppState;
 use crate::optimization::solver::solve_pose_ratio;
 use egui::Ui;
-use egui_plot::{Line, Plot, PlotPoints, Points};
+use egui_plot::{Line, Plot, PlotBounds, PlotPoints, Points};
 
 /// Render the linkage visualization plot
 pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
@@ -51,16 +51,26 @@ pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
     let w = [pose.points.w.x * scale, -pose.points.w.y * scale];
     let bc = [pose.points.bc.x * scale, -pose.points.bc.y * scale];
 
+    let apply_bounds = state.plot_bounds.is_none();
+    if apply_bounds {
+        state.plot_bounds = Some(compute_solution_bounds(solution));
+    }
+    let plot_bounds = state.plot_bounds.unwrap();
+
     // Plot
     Plot::new("linkage_plot")
         .width(400.0)
         .height(400.0)
         .data_aspect(1.0)
+        .auto_bounds(false.into())
         .show_axes(true)
         .show_grid(true)
         .allow_zoom(true)
         .allow_drag(true)
         .show(ui, |plot_ui| {
+            if apply_bounds {
+                plot_ui.set_plot_bounds(plot_bounds);
+            }
             // H-K segment (upper leg) - blue
             plot_ui.line(
                 Line::new(PlotPoints::from(vec![h, k]))
@@ -153,6 +163,12 @@ pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
                 ui.label(format!("{:.2}", pt.y * scale));
                 ui.end_row();
             }
+
+            let kc_norm = (pose.points.k - pose.points.c).norm() * scale;
+            ui.label("||K-C||");
+            ui.label(format!("{:.2}", kc_norm));
+            ui.label("-");
+            ui.end_row();
         });
 
     if pose.crossing {
@@ -162,4 +178,48 @@ pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
             "Warning: Crossing detected at this pose!",
         );
     }
+
+    if !pose.success {
+        ui.add_space(5.0);
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            format!("Pose solve failed (cost: {:.3e})", pose.cost),
+        );
+    }
+}
+
+fn compute_solution_bounds(solution: &crate::types::Solution) -> PlotBounds {
+    let scale = 1000.0;
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    for pose in &solution.poses {
+        let points = [
+            pose.points.h,
+            pose.points.k,
+            pose.points.c,
+            pose.points.w,
+            pose.points.bc,
+        ];
+        for pt in points {
+            let x = pt.x * scale;
+            let y = -pt.y * scale;
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+    }
+
+    if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
+        return PlotBounds::new_symmetrical(100.0);
+    }
+
+    let width = (max_x - min_x).max(1.0);
+    let height = (max_y - min_y).max(1.0);
+    let pad = 0.1 * width.max(height);
+
+    PlotBounds::from_min_max([min_x - pad, min_y - pad], [max_x + pad, max_y + pad])
 }
