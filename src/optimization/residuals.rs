@@ -2,7 +2,24 @@ use crate::config::Config;
 use crate::geometry::{seg_seg_distance, wrap_pi};
 use crate::linkage::{bc_from_params, eval_pose_for_theta, height_for_ratio};
 use crate::optimization::packing::unpack_vars;
+use crate::types::Point2D;
 use nalgebra::Vector2;
+
+/// Compute knee angle (H-K-W) from joint positions.
+/// Returns None if either segment is degenerate.
+#[inline]
+fn compute_knee_angle(h: &Point2D, k: &Point2D, w: &Point2D) -> Option<f64> {
+    let vec_kh = h - k;
+    let vec_kw = w - k;
+    let len_kh = vec_kh.norm();
+    let len_kw = vec_kw.norm();
+    if len_kh > 1e-9 && len_kw > 1e-9 {
+        let cos_angle = (vec_kh.dot(&vec_kw) / (len_kh * len_kw)).clamp(-1.0, 1.0);
+        Some(cos_angle.acos())
+    } else {
+        None
+    }
+}
 
 /// Compute residual vector for the full optimization problem
 /// Returns weighted constraint violations as a vector
@@ -11,7 +28,15 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
     let h = Vector2::new(0.0, 0.0);
     let bc = bc_from_params(vars.xbc, vars.ybc, cfg);
 
-    let mut r: Vec<f64> = Vec::with_capacity(100);
+    // Calculate exact capacity to avoid reallocations:
+    // - Fixed constraints: up to 13 (link ratios, pin constraints, regularization, bias, mean_wx)
+    // - Per-pose: up to 8 each (pose target, knee, 3 below-ground, crossing, angle, alpha)
+    // - Wheel X alignment: n_poses
+    // - Jumping (n>=2): 1 + 5*(n-1) = 5n - 4
+    // Total max: 13 + 8n + n + 5n - 4 = 9 + 14n
+    let n_poses = cfg.ratios.len();
+    let capacity = 9 + 14 * n_poses;
+    let mut r: Vec<f64> = Vec::with_capacity(capacity);
 
     // --- Link ratio constraints ---
     // CW/HK ratio
@@ -104,53 +129,21 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
         r.push(cross_scale * cfg.w_no_cross);
 
         // Knee angle constraint (angle H-K-W)
-        let vec_kh = h - k;
-        let vec_kw = w - k;
-        let len_kh = vec_kh.norm();
-        let len_kw = vec_kw.norm();
-        let alpha = if len_kh > 1e-9 && len_kw > 1e-9 {
-            let cos_angle = (vec_kh.dot(&vec_kw) / (len_kh * len_kw)).clamp(-1.0, 1.0);
-            Some(cos_angle.acos())
-        } else {
-            None
-        };
+        let alpha = compute_knee_angle(&h, &k, &w);
         if let Some(angle_hkw) = alpha {
             let angle_violation = (angle_hkw - cfg.max_angle_hkw).max(0.0);
             r.push(angle_violation * cfg.w_angle_hkw);
         }
 
         // Pose=1 theta target (alpha input)
+        // Uses forward difference (one extra eval) instead of central difference (two extra evals)
         if (ratio - 1.0).abs() < 1e-9 && cfg.w_theta_pose1 > 0.0 {
             if let Some(alpha_current) = alpha {
                 let alpha_target = cfg.alpha_pose1_target;
                 let alpha_error = alpha_current - alpha_target;
 
                 let eps = 1e-4;
-                let alpha_prev = eval_pose_for_theta(
-                    theta - eps,
-                    &bc,
-                    vars.lu,
-                    vars.lkc,
-                    vars.lc,
-                    vars.lkw,
-                    target_y,
-                    Some(&c),
-                )
-                .map(|(k_p, _c_p, w_p, _)| {
-                    let v_kh = h - k_p;
-                    let v_kw = w_p - k_p;
-                    let len_kh = v_kh.norm();
-                    let len_kw = v_kw.norm();
-                    if len_kh > 1e-9 && len_kw > 1e-9 {
-                        let cos_angle =
-                            (v_kh.dot(&v_kw) / (len_kh * len_kw)).clamp(-1.0, 1.0);
-                        Some(cos_angle.acos())
-                    } else {
-                        None
-                    }
-                })
-                .flatten();
-
+                // Forward difference: compute alpha at theta + eps, reuse alpha_current
                 let alpha_next = eval_pose_for_theta(
                     theta + eps,
                     &bc,
@@ -161,25 +154,13 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
                     target_y,
                     Some(&c),
                 )
-                .map(|(k_n, _c_n, w_n, _)| {
-                    let v_kh = h - k_n;
-                    let v_kw = w_n - k_n;
-                    let len_kh = v_kh.norm();
-                    let len_kw = v_kw.norm();
-                    if len_kh > 1e-9 && len_kw > 1e-9 {
-                        let cos_angle =
-                            (v_kh.dot(&v_kw) / (len_kh * len_kw)).clamp(-1.0, 1.0);
-                        Some(cos_angle.acos())
-                    } else {
-                        None
-                    }
-                })
-                .flatten();
+                .and_then(|(k_n, _c_n, w_n, _)| compute_knee_angle(&h, &k_n, &w_n));
 
-                let theta_error = if let (Some(a0), Some(a1)) = (alpha_prev, alpha_next) {
-                    let dalpha = a1 - a0;
+                let theta_error = if let Some(a1) = alpha_next {
+                    let dalpha = a1 - alpha_current;
                     if dalpha.abs() > 1e-6 {
-                        alpha_error / (dalpha / (2.0 * eps))
+                        // Forward difference: dalpha/dtheta ≈ (alpha_next - alpha_current) / eps
+                        alpha_error / (dalpha / eps)
                     } else {
                         alpha_error
                     }

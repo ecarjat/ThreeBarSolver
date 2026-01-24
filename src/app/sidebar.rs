@@ -512,7 +512,6 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                         Ok(()) => {
                             let solution = solve(&state.config);
                             state.solution = Some(solution);
-                            state.pose_seed = None;
                             state.current_pose_ratio = 0.0;
                             state.invalidate_pose_cache();
                         }

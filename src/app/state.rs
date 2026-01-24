@@ -9,7 +9,6 @@ use std::path::Path;
 pub struct AppState {
     pub config: Config,
     pub solution: Option<Solution>,
-    pub pose_seed: Option<Vec<f64>>,
     pub current_pose_ratio: f32,
     pub is_solving: bool,
     pub solver_error: Option<String>,
@@ -72,7 +71,6 @@ impl AppState {
             ratio_100,
             config: cfg,
             solution: None,
-            pose_seed: None,
             current_pose_ratio: 0.0,
             is_solving: false,
             solver_error: None,

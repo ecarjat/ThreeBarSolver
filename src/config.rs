@@ -112,7 +112,6 @@ pub struct Config {
     pub ratios_sorted: Vec<(usize, f64)>,
 
     // Weights for residuals
-    pub w_len: f64,              // Length constraint weight
     pub w_pose: f64,             // Pose target weight
     pub w_wheel_x: f64,          // Wheel X deviation weight
     pub w_wheel_x_mean: f64,     // Mean wheel X weight
@@ -184,7 +183,6 @@ impl Default for Config {
             h_ext: 0.65,
             ratios,
             ratios_sorted,
-            w_len: 250.0,
             w_pose: 900.0,
             w_wheel_x: 2000.0,
             w_wheel_x_mean: 200.0,
