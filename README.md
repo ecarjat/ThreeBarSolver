@@ -15,8 +15,8 @@ The 3-bar linkage consists of 5 key points:
       │ upper leg (Lu)    │
       │                   │ Lkc
       │                   │
-      │                   C (Inner Joint) ──── Bc (Pin Joint)
-      │                                          link (Lc)
+Bc (Pin Joint) ────────── C (Inner Joint)  
+      │         link (Lc)                             
 ```
 
 The lower leg is a **single bar** with three connection points: **W --- K --- C** (collinear).

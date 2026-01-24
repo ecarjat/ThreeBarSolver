@@ -4,6 +4,7 @@ use crate::linkage::{eval_pose_for_theta, height_for_ratio};
 use egui::Ui;
 use egui_plot::{Line, Plot, PlotBounds, PlotPoints, Points};
 use std::f64::consts::PI;
+use std::env;
 
 /// Render the linkage visualization plot
 pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
@@ -36,7 +37,8 @@ pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
     let pose = state.cached_pose.as_ref().expect("pose cache missing");
     let display_points = &pose.points;
     let display_crossing = pose.crossing;
-    let w_trace = build_w_trace_points(&state.config, solution, 101);
+    let trace_samples = 121;
+    let w_trace = build_w_trace_points(&state.config, solution, trace_samples);
 
     // Convert to mm for display
     let scale = 1000.0;
@@ -46,33 +48,26 @@ pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
     let w = [display_points.w.x * scale, -display_points.w.y * scale];
     let bc = [display_points.bc.x * scale, -display_points.bc.y * scale];
 
-    let apply_bounds = state.plot_bounds.is_none();
-    if apply_bounds {
-        state.plot_bounds = Some(compute_solution_bounds(solution, Some(display_points)));
-    }
-    let mut plot_bounds = state.plot_bounds.unwrap();
-    let mut should_set_bounds = apply_bounds;
-
-    // If current pose is outside the cached bounds, expand to include it.
-    if !pose_within_bounds(display_points, plot_bounds) {
-        plot_bounds = compute_solution_bounds(solution, Some(display_points));
-        state.plot_bounds = Some(plot_bounds);
-        should_set_bounds = true;
-    }
+    let plot_bounds = compute_solution_bounds(
+        &state.config,
+        solution,
+        Some(display_points),
+        trace_samples,
+        &w_trace,
+    );
+    state.plot_bounds = Some(plot_bounds);
+    let should_set_bounds = true;
 
     // Plot
-    let mut plot = Plot::new("linkage_plot")
+    let plot = Plot::new("linkage_plot")
         .width(400.0)
         .height(400.0)
         .data_aspect(1.0)
-        .auto_bounds(false.into())
+        .auto_bounds(true.into())
         .show_axes(true)
         .show_grid(true)
         .allow_zoom(true)
         .allow_drag(true);
-    if apply_bounds {
-        plot = plot.reset();
-    }
     plot.show(ui, |plot_ui| {
         if should_set_bounds {
             plot_ui.set_plot_bounds(plot_bounds);
@@ -150,6 +145,28 @@ pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
                     .name("Bc (pin joint)"),
             );
     });
+
+    if should_recompute && env::var("PLOT_DEBUG").ok().as_deref() == Some("1") {
+        let min = plot_bounds.min();
+        let max = plot_bounds.max();
+        let bc_mm = [display_points.bc.x * scale, -display_points.bc.y * scale];
+        let w_mm = [display_points.w.x * scale, -display_points.w.y * scale];
+        let c_mm = [display_points.c.x * scale, -display_points.c.y * scale];
+        eprintln!(
+            "plot_debug ratio={:.3} bounds=([{:.2},{:.2}]..[{:.2},{:.2}]) Bc=({:.2},{:.2}) C=({:.2},{:.2}) W=({:.2},{:.2})",
+            ratio,
+            min[0],
+            min[1],
+            max[0],
+            max[1],
+            bc_mm[0],
+            bc_mm[1],
+            c_mm[0],
+            c_mm[1],
+            w_mm[0],
+            w_mm[1]
+        );
+    }
 
     // Status directly under the diagram
     ui.add_space(6.0);
@@ -262,8 +279,11 @@ pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn compute_solution_bounds(
+    cfg: &crate::config::Config,
     solution: &crate::types::Solution,
     extra_pose: Option<&crate::types::PosePoints>,
+    samples: usize,
+    trace_points: &[[f64; 2]],
 ) -> PlotBounds {
     let scale = 1000.0;
     let mut min_x = f64::INFINITY;
@@ -271,34 +291,71 @@ fn compute_solution_bounds(
     let mut max_x = f64::NEG_INFINITY;
     let mut max_y = f64::NEG_INFINITY;
 
-    for pose in &solution.poses {
-        let points = [
-            pose.points.h,
-            pose.points.k,
-            pose.points.c,
-            pose.points.w,
-            pose.points.bc,
-        ];
-        for pt in points {
-            let x = pt.x * scale;
-            let y = -pt.y * scale;
+    let mut extend = |x: f64, y: f64| {
+        if x.is_finite() && y.is_finite() {
             min_x = min_x.min(x);
             max_x = max_x.max(x);
             min_y = min_y.min(y);
             max_y = max_y.max(y);
+        }
+    };
+
+    for pose in &solution.poses {
+        let points = [pose.points.w, pose.points.c, pose.points.bc];
+        for pt in points {
+            let x = pt.x * scale;
+            let y = -pt.y * scale;
+            extend(x, y);
+        }
+    }
+
+    // Always include the fixed pin joint
+    extend(
+        solution.pin_joint.x * scale,
+        -solution.pin_joint.y * scale,
+    );
+
+    if samples >= 2 && !solution.poses.is_empty() {
+        let min_ratio = solution
+            .poses
+            .iter()
+            .map(|pose| pose.ratio)
+            .fold(f64::INFINITY, f64::min);
+        let max_ratio = solution
+            .poses
+            .iter()
+            .map(|pose| pose.ratio)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        if min_ratio.is_finite() && max_ratio.is_finite() {
+            let steps = samples.max(2);
+            for i in 0..steps {
+                let t = i as f64 / (steps - 1) as f64;
+                let ratio = min_ratio + t * (max_ratio - min_ratio);
+                let pose = interpolate_pose_for_ratio(cfg, solution, ratio);
+                if pose.success {
+                    let points = [pose.points.w, pose.points.c, pose.points.bc];
+                    for pt in points {
+                        let x = pt.x * scale;
+                        let y = -pt.y * scale;
+                        extend(x, y);
+                    }
+                }
+            }
         }
     }
 
     if let Some(pose) = extra_pose {
-        let points = [pose.h, pose.k, pose.c, pose.w, pose.bc];
+        let points = [pose.w, pose.c, pose.bc];
         for pt in points {
             let x = pt.x * scale;
             let y = -pt.y * scale;
-            min_x = min_x.min(x);
-            max_x = max_x.max(x);
-            min_y = min_y.min(y);
-            max_y = max_y.max(y);
+            extend(x, y);
         }
+    }
+
+    for pt in trace_points {
+        extend(pt[0], pt[1]);
     }
 
     if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
@@ -310,23 +367,6 @@ fn compute_solution_bounds(
     let pad = 0.1 * width.max(height);
 
     PlotBounds::from_min_max([min_x - pad, min_y - pad], [max_x + pad, max_y + pad])
-}
-
-fn pose_within_bounds(pose: &crate::types::PosePoints, bounds: PlotBounds) -> bool {
-    let scale = 1000.0;
-    let points = [pose.h, pose.k, pose.c, pose.w, pose.bc];
-    for pt in points {
-        let x = pt.x * scale;
-        let y = -pt.y * scale;
-        if x < bounds.min()[0]
-            || x > bounds.max()[0]
-            || y < bounds.min()[1]
-            || y > bounds.max()[1]
-        {
-            return false;
-        }
-    }
-    true
 }
 
 fn interpolate_pose_for_ratio(
