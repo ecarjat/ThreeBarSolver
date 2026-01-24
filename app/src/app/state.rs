@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::types::Solution;
+use crate::types::{PoseSolveResult, Solution};
 
 /// Application state
 #[derive(Default)]
@@ -10,6 +10,8 @@ pub struct AppState {
     pub current_pose_ratio: f32,
     pub is_solving: bool,
     pub solver_error: Option<String>,
+    pub cached_pose_ratio: Option<f32>,
+    pub cached_pose: Option<PoseSolveResult>,
 
     // UI state for mm/m conversion (displayed in mm)
     pub h_crouch_mm: f32,
@@ -56,6 +58,8 @@ impl AppState {
             current_pose_ratio: 0.0,
             is_solving: false,
             solver_error: None,
+            cached_pose_ratio: None,
+            cached_pose: None,
         }
     }
 
@@ -101,5 +105,11 @@ impl AppState {
             ratios = vec![0.0, 0.5, 1.0];
         }
         self.config.ratios = ratios;
+    }
+
+    /// Clear cached pose data so it is recomputed on next render.
+    pub fn invalidate_pose_cache(&mut self) {
+        self.cached_pose_ratio = None;
+        self.cached_pose = None;
     }
 }

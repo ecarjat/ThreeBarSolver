@@ -25,6 +25,7 @@ pub struct Config {
     pub global_maxiter: usize,
     pub global_popsize: usize,
     pub global_tol: f64,
+    pub global_seed: Option<u64>,
 
     // Jumping / transmission shaping
     pub w_jac_profile: f64,   // Jacobian profile weight
@@ -89,6 +90,7 @@ impl Default for Config {
             global_maxiter: 400,
             global_popsize: 15,
             global_tol: 1e-4,
+            global_seed: Some(1234),
             w_jac_profile: 120.0,
             w_jac_bounds: 120.0,
             w_theta_span: 200.0,
@@ -127,6 +129,17 @@ impl Config {
     pub fn validate(&self) -> Result<(), String> {
         if self.ratios.is_empty() {
             return Err("ratios must be non-empty".to_string());
+        }
+        for (idx, ratio) in self.ratios.iter().enumerate() {
+            if !ratio.is_finite() {
+                return Err(format!("ratios[{}] must be a finite number", idx));
+            }
+            if *ratio < 0.0 || *ratio > 1.0 {
+                return Err(format!(
+                    "ratios[{}] must be within [0.0, 1.0] (got {})",
+                    idx, ratio
+                ));
+            }
         }
         if self.n_starts < 1 {
             return Err("n_starts must be >= 1".to_string());

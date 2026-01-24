@@ -8,42 +8,52 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
     ui.separator();
 
     egui::ScrollArea::vertical().show(ui, |ui| {
+        let mut config_changed = false;
+
         // Geometry section
         ui.collapsing("Geometry", |ui| {
             ui.horizontal(|ui| {
                 ui.label("Hcrouch (mm):");
-                ui.add(
+                config_changed |= ui
+                    .add(
                     DragValue::new(&mut state.h_crouch_mm)
                         .speed(1.0)
                         .range(100.0..=500.0),
-                );
+                )
+                    .changed();
             });
 
             ui.horizontal(|ui| {
                 ui.label("Hext (mm):");
-                ui.add(
+                config_changed |= ui
+                    .add(
                     DragValue::new(&mut state.h_ext_mm)
                         .speed(1.0)
                         .range(300.0..=1000.0),
-                );
+                )
+                    .changed();
             });
 
             ui.horizontal(|ui| {
                 ui.label("kc_min (mm):");
-                ui.add(
+                config_changed |= ui
+                    .add(
                     DragValue::new(&mut state.kc_min_mm)
                         .speed(1.0)
                         .range(10.0..=200.0),
-                );
+                )
+                    .changed();
             });
 
             ui.horizontal(|ui| {
                 ui.label("bc_radius_max (mm, 0=off):");
-                ui.add(
+                config_changed |= ui
+                    .add(
                     DragValue::new(&mut state.bc_radius_max_mm)
                         .speed(1.0)
                         .range(0.0..=300.0),
-                );
+                )
+                    .changed();
             });
         });
 
@@ -51,20 +61,24 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
         ui.collapsing("Link Constraints", |ui| {
             ui.horizontal(|ui| {
                 ui.label("kc_max (mm, 0=off):");
-                ui.add(
+                config_changed |= ui
+                    .add(
                     DragValue::new(&mut state.kc_max_mm)
                         .speed(1.0)
                         .range(0.0..=200.0),
-                );
+                )
+                    .changed();
             });
 
             ui.horizontal(|ui| {
                 ui.label("xbc_min (mm):");
-                ui.add(
+                config_changed |= ui
+                    .add(
                     DragValue::new(&mut state.xbc_min_mm)
                         .speed(1.0)
                         .range(0.0..=100.0),
-                );
+                )
+                    .changed();
             });
 
             // CW/HK ratio bounds
@@ -80,6 +94,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     } else {
                         None
                     };
+                    config_changed = true;
                 }
             });
 
@@ -95,6 +110,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     } else {
                         None
                     };
+                    config_changed = true;
                 }
             });
 
@@ -111,6 +127,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     } else {
                         None
                     };
+                    config_changed = true;
                 }
             });
 
@@ -126,6 +143,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     } else {
                         None
                     };
+                    config_changed = true;
                 }
             });
 
@@ -137,6 +155,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .changed()
                 {
                     state.config.w_bc_x = w_bc_x as f64;
+                    config_changed = true;
                 }
             });
 
@@ -148,6 +167,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .changed()
                 {
                     state.config.w_bc_y = w_bc_y as f64;
+                    config_changed = true;
                 }
             });
 
@@ -162,6 +182,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .changed()
                 {
                     state.config.max_angle_hkw = (max_angle_deg as f64).to_radians();
+                    config_changed = true;
                 }
             });
         });
@@ -169,49 +190,57 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
         // Sampling section
         ui.collapsing("Sampling", |ui| {
             ui.label("Pose ratios:");
-            ui.checkbox(&mut state.ratio_0, "0.0");
-            ui.checkbox(&mut state.ratio_25, "0.25");
-            ui.checkbox(&mut state.ratio_50, "0.5");
-            ui.checkbox(&mut state.ratio_75, "0.75");
-            ui.checkbox(&mut state.ratio_100, "1.0");
+            config_changed |= ui.checkbox(&mut state.ratio_0, "0.0").changed();
+            config_changed |= ui.checkbox(&mut state.ratio_25, "0.25").changed();
+            config_changed |= ui.checkbox(&mut state.ratio_50, "0.5").changed();
+            config_changed |= ui.checkbox(&mut state.ratio_75, "0.75").changed();
+            config_changed |= ui.checkbox(&mut state.ratio_100, "1.0").changed();
         });
 
         // Jumping profile section
         ui.collapsing("Jumping Profile", |ui| {
             ui.horizontal(|ui| {
                 ui.label("jac_start (mm/rad):");
-                ui.add(
+                config_changed |= ui
+                    .add(
                     DragValue::new(&mut state.jac_start_mm)
                         .speed(1.0)
                         .range(0.0..=500.0),
-                );
+                )
+                    .changed();
             });
 
             ui.horizontal(|ui| {
                 ui.label("jac_end (mm/rad):");
-                ui.add(
+                config_changed |= ui
+                    .add(
                     DragValue::new(&mut state.jac_end_mm)
                         .speed(1.0)
                         .range(0.0..=500.0),
-                );
+                )
+                    .changed();
             });
 
             ui.horizontal(|ui| {
                 ui.label("jac_min (mm/rad):");
-                ui.add(
+                config_changed |= ui
+                    .add(
                     DragValue::new(&mut state.jac_min_mm)
                         .speed(1.0)
                         .range(0.0..=200.0),
-                );
+                )
+                    .changed();
             });
 
             ui.horizontal(|ui| {
                 ui.label("jac_max (mm/rad):");
-                ui.add(
+                config_changed |= ui
+                    .add(
                     DragValue::new(&mut state.jac_max_mm)
                         .speed(1.0)
                         .range(0.0..=1000.0),
-                );
+                )
+                    .changed();
             });
         });
 
@@ -229,6 +258,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .changed()
                 {
                     state.config.theta_span_min = theta_span_min as f64;
+                    config_changed = true;
                 }
             });
 
@@ -244,6 +274,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .changed()
                 {
                     state.config.theta_step_min = theta_step_min as f64;
+                    config_changed = true;
                 }
             });
         });
@@ -262,6 +293,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     } else {
                         None
                     };
+                    config_changed = true;
                 }
             });
         });
@@ -276,10 +308,13 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .changed()
                 {
                     state.config.n_starts = n_starts as usize;
+                    config_changed = true;
                 }
             });
 
-            ui.checkbox(&mut state.config.use_global_opt, "Use global optimization");
+            config_changed |= ui
+                .checkbox(&mut state.config.use_global_opt, "Use global optimization")
+                .changed();
         });
 
         ui.separator();
@@ -305,6 +340,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                         state.solution = Some(solution);
                         state.pose_seed = None;
                         state.current_pose_ratio = 0.0;
+                        state.invalidate_pose_cache();
                     }
                     Err(e) => {
                         state.solver_error = Some(e);
@@ -320,6 +356,10 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
 
         if let Some(err) = &state.solver_error {
             ui.colored_label(egui::Color32::RED, err);
+        }
+
+        if config_changed {
+            state.invalidate_pose_cache();
         }
     });
 }

@@ -18,18 +18,30 @@ pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
         ui.add(egui::Slider::new(&mut state.current_pose_ratio, 0.0..=1.0).step_by(0.01));
     });
 
-    // Solve pose for current ratio
-    let pose = solve_pose_ratio(
-        &state.config,
-        &solution.lengths,
-        &solution.pin_joint,
-        solution.inner_joint_offset_kc,
-        state.current_pose_ratio as f64,
-        state.pose_seed.as_deref(),
-    );
+    // Solve pose for current ratio (cached)
+    let ratio = state.current_pose_ratio;
+    let should_recompute = match state.cached_pose_ratio {
+        Some(prev) => (prev - ratio).abs() > 1e-6,
+        None => true,
+    };
 
-    // Update seed for continuation
-    state.pose_seed = Some(pose.seed.clone());
+    if should_recompute {
+        let pose = solve_pose_ratio(
+            &state.config,
+            &solution.lengths,
+            &solution.pin_joint,
+            solution.inner_joint_offset_kc,
+            ratio as f64,
+            state.pose_seed.as_deref(),
+        );
+
+        // Update seed for continuation
+        state.pose_seed = Some(pose.seed.clone());
+        state.cached_pose_ratio = Some(ratio);
+        state.cached_pose = Some(pose);
+    }
+
+    let pose = state.cached_pose.as_ref().expect("pose cache missing");
 
     // Convert to mm for display
     let scale = 1000.0;

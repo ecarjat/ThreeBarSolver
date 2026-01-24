@@ -4,6 +4,7 @@ use crate::linkage::{bc_from_params, compute_wheel, has_crossing, height_for_rat
 use crate::optimization::bounds::build_bounds;
 use crate::optimization::packing::{pack_vars, unpack_vars};
 use crate::optimization::problem::{PoseProblem, ThreeBarProblem};
+use crate::optimization::residuals::cost;
 use crate::types::*;
 use argmin::core::{Executor, IterState};
 use argmin::solver::neldermead::NelderMead;
@@ -146,9 +147,100 @@ pub fn solve_multistart(cfg: &Config) -> (Vec<f64>, f64) {
     }
 }
 
+/// Global optimization using Differential Evolution (DE)
+fn solve_global_de(cfg: &Config) -> (Vec<f64>, f64) {
+    let bounds = build_bounds(cfg);
+    let n = bounds.lower.len();
+    let pop_size = cfg.global_popsize.max(4);
+    let seed = cfg.global_seed.unwrap_or(1234);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+
+    let mut pop: Vec<Vec<f64>> = Vec::with_capacity(pop_size);
+    for _ in 0..pop_size {
+        let mut x = vec![0.0; n];
+        for i in 0..n {
+            let lo = bounds.lower[i];
+            let hi = bounds.upper[i];
+            x[i] = lo + rng.gen::<f64>() * (hi - lo);
+        }
+        pop.push(x);
+    }
+
+    let mut costs: Vec<f64> = pop.iter().map(|x| cost(x, cfg)).collect();
+    let mut best_idx = costs
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    let f = 0.7;
+    let cr = 0.9;
+
+    for _ in 0..cfg.global_maxiter.max(1) {
+        let prev_best = costs[best_idx];
+
+        for i in 0..pop_size {
+            let (a, b, c) = pick_three_distinct(i, pop_size, &mut rng);
+            let mut mutant = vec![0.0; n];
+            for j in 0..n {
+                mutant[j] = pop[a][j] + f * (pop[b][j] - pop[c][j]);
+            }
+
+            let mut trial = pop[i].clone();
+            let j_rand = rng.gen_range(0..n);
+            for j in 0..n {
+                if rng.gen::<f64>() < cr || j == j_rand {
+                    trial[j] = mutant[j];
+                }
+            }
+
+            bounds.clamp(&mut trial);
+            let trial_cost = cost(&trial, cfg);
+            if trial_cost < costs[i] {
+                pop[i] = trial;
+                costs[i] = trial_cost;
+                if trial_cost < costs[best_idx] {
+                    best_idx = i;
+                }
+            }
+        }
+
+        if (prev_best - costs[best_idx]).abs() < cfg.global_tol {
+            break;
+        }
+    }
+
+    (pop[best_idx].clone(), costs[best_idx])
+}
+
+fn pick_three_distinct(
+    exclude: usize,
+    n: usize,
+    rng: &mut impl Rng,
+) -> (usize, usize, usize) {
+    let mut a = rng.gen_range(0..n);
+    while a == exclude {
+        a = rng.gen_range(0..n);
+    }
+    let mut b = rng.gen_range(0..n);
+    while b == exclude || b == a {
+        b = rng.gen_range(0..n);
+    }
+    let mut c = rng.gen_range(0..n);
+    while c == exclude || c == a || c == b {
+        c = rng.gen_range(0..n);
+    }
+    (a, b, c)
+}
+
 /// Main solve function
 pub fn solve(cfg: &Config) -> Solution {
-    let (x_stage1, _) = solve_multistart(cfg);
+    let (x_stage1, _) = if cfg.use_global_opt {
+        solve_global_de(cfg)
+    } else {
+        solve_multistart(cfg)
+    };
     let (x_opt, cost, success) = solve_local(cfg, x_stage1);
 
     // Build solution from optimized variables
@@ -229,7 +321,7 @@ fn build_solution(x: &[f64], cost: f64, success: bool, cfg: &Config) -> Solution
             lower_leg_kw: vars.lkw,
             link_bc_c: vars.lc,
         },
-        pin_joint: PinJoint { x: bc.x, y: bc.y },
+        pin_joint: PinJointLocation { x: bc.x, y: bc.y },
         inner_joint_offset_kc: vars.lkc,
         jump_report,
         poses,
@@ -284,13 +376,13 @@ fn compute_jump_report(wheel_ys: &[f64], hip_thetas: &[f64], cfg: &Config) -> Ju
 pub fn solve_pose_ratio(
     cfg: &Config,
     lengths: &Lengths,
-    pin_joint: &PinJoint,
+    pin_joint: &PinJointLocation,
     inner_joint_offset_kc: f64,
     ratio: f64,
     x0: Option<&[f64]>,
 ) -> PoseSolveResult {
     let h = Vector2::new(0.0, 0.0);
-    let bc = bc_from_params(pin_joint.x, pin_joint.y, cfg);
+    let bc = Vector2::new(pin_joint.x, pin_joint.y);
     let lu = lengths.upper_leg_hk;
     let lkw = lengths.lower_leg_kw;
     let lkc = inner_joint_offset_kc;

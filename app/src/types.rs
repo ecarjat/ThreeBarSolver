@@ -12,9 +12,9 @@ pub struct Lengths {
     pub link_bc_c: f64,    // Lc: Pin joint (Bc) to Inner joint (C)
 }
 
-/// Pin joint location
+/// Fixed pin joint location (already constrained if bc_radius_max is used)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PinJoint {
+pub struct PinJointLocation {
     pub x: f64,
     pub y: f64,
 }
@@ -68,7 +68,7 @@ pub struct Solution {
     pub h_crouch: f64,
     pub h_ext: f64,
     pub lengths: Lengths,
-    pub pin_joint: PinJoint,
+    pub pin_joint: PinJointLocation,
     pub inner_joint_offset_kc: f64, // Lkc
     pub jump_report: JumpReport,
     pub poses: Vec<Pose>,
