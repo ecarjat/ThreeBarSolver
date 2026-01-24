@@ -64,10 +64,7 @@ fn is_feasible_global(x: &[f64], cfg: &Config, pose_tol: f64) -> bool {
     let mut preferred_c: Option<Vector2<f64>> = None;
     let mut poses_for_crossing = Vec::new();
 
-    let mut ratios_sorted: Vec<_> = cfg.ratios.iter().copied().enumerate().collect();
-    ratios_sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-
-    for (idx, ratio) in ratios_sorted {
+    for &(idx, ratio) in &cfg.ratios_sorted {
         let theta = *vars.poses.get(&idx).unwrap_or(&0.0);
         let target_y = height_for_ratio(cfg, ratio);
         let (k, c, _w, f) = match eval_pose_for_theta(
@@ -166,10 +163,8 @@ pub fn solve_multistart(cfg: &Config) -> (Vec<f64>, f64) {
             let mut preferred_c: Option<Vector2<f64>> = None;
             let mut poses_for_crossing = Vec::new();
             let mut infeasible = false;
-            let mut ratios_sorted: Vec<_> = cfg.ratios.iter().copied().enumerate().collect();
-            ratios_sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-            for (idx, ratio) in ratios_sorted {
+            for &(idx, ratio) in &cfg.ratios_sorted {
                 let theta = *vars.poses.get(&idx).unwrap_or(&0.0);
                 let target_y = height_for_ratio(cfg, ratio);
                 if let Some((k, c, _w, _f)) = eval_pose_for_theta(
@@ -321,23 +316,75 @@ fn solve_global_de(cfg: &Config) -> (Vec<f64>, f64) {
     (pop[best_idx].clone(), costs[best_idx])
 }
 
+/// Pick three distinct indices from 0..n, excluding `exclude`.
+/// Requires n >= 4 to guarantee 3 distinct values different from exclude.
+/// Uses bounded loops to prevent infinite iteration.
 fn pick_three_distinct(
     exclude: usize,
     n: usize,
     rng: &mut impl Rng,
 ) -> (usize, usize, usize) {
+    // Need at least 4 elements to pick 3 distinct from n, excluding 1
+    debug_assert!(n >= 4, "pick_three_distinct requires n >= 4, got {}", n);
+
+    // Fallback to deterministic selection if n is too small
+    if n < 4 {
+        // Shouldn't happen due to pop_size.max(4) guard, but handle gracefully
+        let indices: Vec<usize> = (0..n).filter(|&i| i != exclude).collect();
+        let a = indices.first().copied().unwrap_or(0);
+        let b = indices.get(1).copied().unwrap_or(a);
+        let c = indices.get(2).copied().unwrap_or(b);
+        return (a, b, c);
+    }
+
+    const MAX_TRIES: usize = 100;
+
     let mut a = rng.gen_range(0..n);
-    while a == exclude {
+    for _ in 0..MAX_TRIES {
+        if a != exclude {
+            break;
+        }
         a = rng.gen_range(0..n);
     }
+    // Fallback if still hitting exclude
+    if a == exclude {
+        a = (exclude + 1) % n;
+    }
+
     let mut b = rng.gen_range(0..n);
-    while b == exclude || b == a {
+    for _ in 0..MAX_TRIES {
+        if b != exclude && b != a {
+            break;
+        }
         b = rng.gen_range(0..n);
     }
+    // Fallback: find first valid index
+    if b == exclude || b == a {
+        for i in 0..n {
+            if i != exclude && i != a {
+                b = i;
+                break;
+            }
+        }
+    }
+
     let mut c = rng.gen_range(0..n);
-    while c == exclude || c == a || c == b {
+    for _ in 0..MAX_TRIES {
+        if c != exclude && c != a && c != b {
+            break;
+        }
         c = rng.gen_range(0..n);
     }
+    // Fallback: find first valid index
+    if c == exclude || c == a || c == b {
+        for i in 0..n {
+            if i != exclude && i != a && i != b {
+                c = i;
+                break;
+            }
+        }
+    }
+
     (a, b, c)
 }
 
@@ -373,10 +420,7 @@ fn build_solution(x: &[f64], cost: f64, success: bool, cfg: &Config) -> Solution
     let mut preferred_c: Option<Vector2<f64>> = None;
     let mut infeasible = false;
 
-    let mut ratios_sorted: Vec<_> = cfg.ratios.iter().copied().enumerate().collect();
-    ratios_sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-
-    for (idx, ratio) in ratios_sorted {
+    for &(idx, ratio) in &cfg.ratios_sorted {
         let theta = *vars.poses.get(&idx).unwrap_or(&0.0);
         let target_y = height_for_ratio(cfg, ratio);
         if let Some((k, c, w, _f)) = eval_pose_for_theta(

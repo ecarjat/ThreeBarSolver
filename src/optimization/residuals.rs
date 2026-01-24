@@ -59,13 +59,9 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
     let mut preferred_c: Option<Vector2<f64>> = None;
     let mut infeasible = false;
 
-    // Sort poses by ratio
-    let mut ratios_sorted: Vec<_> = cfg.ratios.iter().copied().enumerate().collect();
-    ratios_sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-
-    for (idx, ratio) in &ratios_sorted {
-        let theta = *vars.poses.get(idx).unwrap();
-        let target_y = height_for_ratio(cfg, *ratio);
+    for &(idx, ratio) in &cfg.ratios_sorted {
+        let theta = *vars.poses.get(&idx).unwrap();
+        let target_y = height_for_ratio(cfg, ratio);
         let (k, c, w, f) = match eval_pose_for_theta(
             theta,
             &bc,
@@ -209,16 +205,16 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
     r.push(mean_wx * cfg.w_wheel_x_mean);
 
     // --- Jumping transmission shaping ---
-    if ratios_sorted.len() >= 2 {
+    if cfg.ratios_sorted.len() >= 2 {
         let dtheta_total = wrap_pi(hip_thetas.last().unwrap() - hip_thetas.first().unwrap());
         let expected_sign = if dtheta_total >= 0.0 { 1.0 } else { -1.0 };
         let theta_span = dtheta_total.abs();
 
         r.push((cfg.theta_span_min - theta_span).max(0.0) * cfg.w_theta_span);
 
-        for i in 0..(ratios_sorted.len() - 1) {
-            let (_, r0) = ratios_sorted[i];
-            let (_, r1) = ratios_sorted[i + 1];
+        for i in 0..(cfg.ratios_sorted.len() - 1) {
+            let (_, r0) = cfg.ratios_sorted[i];
+            let (_, r1) = cfg.ratios_sorted[i + 1];
             let dy = wheel_ys[i + 1] - wheel_ys[i];
             let dtheta = wrap_pi(hip_thetas[i + 1] - hip_thetas[i]);
 

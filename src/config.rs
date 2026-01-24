@@ -43,8 +43,12 @@ impl VersionedParams {
             }
         };
 
-        serde_json::from_value(merged)
-            .map_err(|e| format!("Failed to parse config: {}", e))
+        let mut config: Config = serde_json::from_value(merged)
+            .map_err(|e| format!("Failed to parse config: {}", e))?;
+
+        // Populate the skipped field after deserialization
+        config.update_ratios_sorted();
+        Ok(config)
     }
 
     /// Migrate from an older version to the current version
@@ -100,6 +104,12 @@ pub struct Config {
     pub h_crouch: f64,    // Crouched wheel height (m)
     pub h_ext: f64,       // Extended wheel height (m)
     pub ratios: Vec<f64>, // Pose sample ratios (0.0 to 1.0)
+
+    /// Pre-computed indices for iterating ratios in sorted order.
+    /// Each element is (original_index, ratio_value).
+    /// Skipped during serialization; recomputed on load.
+    #[serde(skip)]
+    pub ratios_sorted: Vec<(usize, f64)>,
 
     // Weights for residuals
     pub w_len: f64,              // Length constraint weight
@@ -167,10 +177,13 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
+        let ratios = vec![0.0, 0.5, 1.0];
+        let ratios_sorted = Self::compute_sorted_indices(&ratios);
         Self {
             h_crouch: 0.35,
             h_ext: 0.65,
-            ratios: vec![0.0, 0.5, 1.0],
+            ratios,
+            ratios_sorted,
             w_len: 250.0,
             w_pose: 900.0,
             w_wheel_x: 2000.0,
@@ -221,6 +234,20 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Compute sorted indices for ratios (ascending by ratio value).
+    /// Returns Vec of (original_index, ratio_value) sorted by ratio_value.
+    pub fn compute_sorted_indices(ratios: &[f64]) -> Vec<(usize, f64)> {
+        let mut sorted: Vec<(usize, f64)> = ratios.iter().copied().enumerate().collect();
+        sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        sorted
+    }
+
+    /// Update the cached sorted indices after ratios have been modified.
+    /// Call this whenever `ratios` is changed.
+    pub fn update_ratios_sorted(&mut self) {
+        self.ratios_sorted = Self::compute_sorted_indices(&self.ratios);
+    }
+
     /// Validate configuration constraints
     pub fn validate(&self) -> Result<(), String> {
         if self.ratios.is_empty() {

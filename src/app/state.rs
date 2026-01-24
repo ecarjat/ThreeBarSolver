@@ -155,6 +155,7 @@ impl AppState {
             ratios = vec![0.0, 0.5, 1.0];
         }
         self.config.ratios = ratios;
+        self.config.update_ratios_sorted();
     }
 
     /// Clear cached pose data and plot bounds so they are recomputed on next render.
