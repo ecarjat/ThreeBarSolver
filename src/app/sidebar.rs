@@ -392,6 +392,19 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     )
                     .changed();
             });
+
+            ui.horizontal(|ui| {
+                ui.label("w_jac_profile (takeoff):")
+                    .on_hover_text("Weight for Jacobian profile tracking; higher -> stronger push toward jac_end / takeoff velocity");
+                let mut w = state.config.w_jac_profile as f32;
+                if ui
+                    .add(DragValue::new(&mut w).speed(10.0).range(0.0..=10000.0))
+                    .changed()
+                {
+                    state.config.w_jac_profile = w as f64;
+                    config_changed = true;
+                }
+            });
         });
 
         // Theta constraints

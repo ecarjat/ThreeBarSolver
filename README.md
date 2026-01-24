@@ -221,6 +221,17 @@ Given fixed linkage parameters, it:
 
 3. Return the pose with minimal |W.y - target_y|
 
+## Screenshots
+
+The solver provides an interactive GUI for configuring and visualizing linkage designs:
+
+![Solver UI Screenshot](docs/images/ui-screenshot.png)
+
+The interface shows:
+- **Left sidebar**: Parameter controls for linkage dimensions, constraints, and weights
+- **Center plot**: Real-time visualization of the mechanism geometry at the selected pose
+- **Right panel**: Optimization results including quality metrics and jump characteristics
+
 ## Key Files
 
 ```
