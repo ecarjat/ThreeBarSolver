@@ -5,6 +5,19 @@ use crate::optimization::packing::unpack_vars;
 use crate::types::Point2D;
 use nalgebra::Vector2;
 
+// Infeasibility penalty for constraint violations
+const INFEASIBLE_PENALTY: f64 = 1e6;
+
+// Geometric tolerances
+const GEOMETRIC_EPS: f64 = 1e-9;
+
+// Numerical differentiation
+const NUMERICAL_DIFF_EPS: f64 = 1e-4;
+const DALPHA_THRESHOLD: f64 = 1e-6;
+
+// Near-singular theta step threshold
+const DTHETA_MIN_ABS: f64 = 1e-4;
+
 /// Compute knee angle (H-K-W) from joint positions.
 /// Returns None if either segment is degenerate.
 #[inline]
@@ -13,7 +26,7 @@ fn compute_knee_angle(h: &Point2D, k: &Point2D, w: &Point2D) -> Option<f64> {
     let vec_kw = w - k;
     let len_kh = vec_kh.norm();
     let len_kw = vec_kw.norm();
-    if len_kh > 1e-9 && len_kw > 1e-9 {
+    if len_kh > GEOMETRIC_EPS && len_kw > GEOMETRIC_EPS {
         let cos_angle = (vec_kh.dot(&vec_kw) / (len_kh * len_kw)).clamp(-1.0, 1.0);
         Some(cos_angle.acos())
     } else {
@@ -41,7 +54,7 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
     // --- Link ratio constraints ---
     // CW/HK ratio
     if cfg.cw_hk_ratio_min.is_some() || cfg.cw_hk_ratio_max.is_some() {
-        let hk_len = vars.lu.max(1e-9);
+        let hk_len = vars.lu.max(GEOMETRIC_EPS);
         let cw_len = vars.lkc + vars.lkw;
         let ratio = cw_len / hk_len;
 
@@ -55,7 +68,7 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
 
     // LC/HK ratio
     if cfg.lc_hk_ratio_min.is_some() || cfg.lc_hk_ratio_max.is_some() {
-        let hk_len = vars.lu.max(1e-9);
+        let hk_len = vars.lu.max(GEOMETRIC_EPS);
         let ratio = vars.lc / hk_len;
 
         if let Some(min) = cfg.lc_hk_ratio_min {
@@ -100,7 +113,7 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
             Some(result) => result,
             None => {
                 infeasible = true;
-                r.push(1e6);
+                r.push(INFEASIBLE_PENALTY);
                 continue;
             }
         };
@@ -137,15 +150,14 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
 
         // Pose=1 theta target (alpha input)
         // Uses forward difference (one extra eval) instead of central difference (two extra evals)
-        if (ratio - 1.0).abs() < 1e-9 && cfg.w_theta_pose1 > 0.0 {
+        if (ratio - 1.0).abs() < GEOMETRIC_EPS && cfg.w_theta_pose1 > 0.0 {
             if let Some(alpha_current) = alpha {
                 let alpha_target = cfg.alpha_pose1_target;
                 let alpha_error = alpha_current - alpha_target;
 
-                let eps = 1e-4;
                 // Forward difference: compute alpha at theta + eps, reuse alpha_current
                 let alpha_next = eval_pose_for_theta(
-                    theta + eps,
+                    theta + NUMERICAL_DIFF_EPS,
                     &bc,
                     vars.lu,
                     vars.lkc,
@@ -158,9 +170,9 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
 
                 let theta_error = if let Some(a1) = alpha_next {
                     let dalpha = a1 - alpha_current;
-                    if dalpha.abs() > 1e-6 {
+                    if dalpha.abs() > DALPHA_THRESHOLD {
                         // Forward difference: dalpha/dtheta ≈ (alpha_next - alpha_current) / eps
-                        alpha_error / (dalpha / eps)
+                        alpha_error / (dalpha / NUMERICAL_DIFF_EPS)
                     } else {
                         alpha_error
                     }
@@ -200,10 +212,10 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
             let dtheta = wrap_pi(hip_thetas[i + 1] - hip_thetas[i]);
 
             // Near-singular penalty
-            r.push((1e-4 - dtheta.abs()).max(0.0) * 1e6);
+            r.push((DTHETA_MIN_ABS - dtheta.abs()).max(0.0) * INFEASIBLE_PENALTY);
 
-            let dtheta_safe = if dtheta.abs() < 1e-4 {
-                if dtheta >= 0.0 { 1e-4 } else { -1e-4 }
+            let dtheta_safe = if dtheta.abs() < DTHETA_MIN_ABS {
+                if dtheta >= 0.0 { DTHETA_MIN_ABS } else { -DTHETA_MIN_ABS }
             } else {
                 dtheta
             };
@@ -228,7 +240,7 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
     // Regularization
     for val in [vars.lu, vars.lkw, vars.lkc, vars.lc] {
         if val <= 0.0 {
-            r.push((val.abs() + 1.0) * 1e6);
+            r.push((val.abs() + 1.0) * INFEASIBLE_PENALTY);
         } else {
             r.push(val * cfg.w_reg);
         }

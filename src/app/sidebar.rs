@@ -108,12 +108,10 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .changed();
                 ui.label("w:")
                     .on_hover_text("Weight for xbc_min constraint");
-                let mut w = state.config.w_xbc_min as f32;
                 if ui
-                    .add(DragValue::new(&mut w).speed(10.0).range(0.0..=10000.0))
+                    .add(DragValue::new(&mut state.config.w_xbc_min).speed(10.0).range(0.0..=10000.0))
                     .changed()
                 {
-                    state.config.w_xbc_min = w as f64;
                     config_changed = true;
                 }
             });
@@ -122,7 +120,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
             ui.label("Link length ratios (CW/HK):");
 
             // CW/HK ratio bounds
-            let mut cw_min = state.config.cw_hk_ratio_min.unwrap_or(0.9) as f32;
+            let mut cw_min = state.config.cw_hk_ratio_min.unwrap_or(0.9);
             ui.horizontal(|ui| {
                 ui.label("min:")
                     .on_hover_text("Min ratio of (Lkc + Lkw) / Lu. 0 = disabled");
@@ -130,37 +128,27 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .add(DragValue::new(&mut cw_min).speed(0.01).range(0.0..=2.0))
                     .changed()
                 {
-                    state.config.cw_hk_ratio_min = if cw_min > 0.0 {
-                        Some(cw_min as f64)
-                    } else {
-                        None
-                    };
+                    state.config.cw_hk_ratio_min = if cw_min > 0.0 { Some(cw_min) } else { None };
                     config_changed = true;
                 }
-                let mut cw_max = state.config.cw_hk_ratio_max.unwrap_or(1.1) as f32;
+                let mut cw_max = state.config.cw_hk_ratio_max.unwrap_or(1.1);
                 ui.label("max:")
                     .on_hover_text("Max ratio of (Lkc + Lkw) / Lu. 0 = disabled");
                 if ui
                     .add(DragValue::new(&mut cw_max).speed(0.01).range(0.0..=2.0))
                     .changed()
                 {
-                    state.config.cw_hk_ratio_max = if cw_max > 0.0 {
-                        Some(cw_max as f64)
-                    } else {
-                        None
-                    };
+                    state.config.cw_hk_ratio_max = if cw_max > 0.0 { Some(cw_max) } else { None };
                     config_changed = true;
                 }
             });
             ui.horizontal(|ui| {
                 ui.label("weight:")
                     .on_hover_text("Weight for CW/HK ratio constraint");
-                let mut w = state.config.w_cw_hk_ratio as f32;
                 if ui
-                    .add(DragValue::new(&mut w).speed(10.0).range(0.0..=10000.0))
+                    .add(DragValue::new(&mut state.config.w_cw_hk_ratio).speed(10.0).range(0.0..=10000.0))
                     .changed()
                 {
-                    state.config.w_cw_hk_ratio = w as f64;
                     config_changed = true;
                 }
             });
@@ -169,7 +157,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
             ui.label("Link length ratios (LC/HK):");
 
             // LC/HK ratio bounds
-            let mut lc_min = state.config.lc_hk_ratio_min.unwrap_or(1.1) as f32;
+            let mut lc_min = state.config.lc_hk_ratio_min.unwrap_or(1.1);
             ui.horizontal(|ui| {
                 ui.label("min:")
                     .on_hover_text("Min ratio of Lc / Lu. 0 = disabled");
@@ -177,37 +165,27 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .add(DragValue::new(&mut lc_min).speed(0.01).range(0.0..=2.0))
                     .changed()
                 {
-                    state.config.lc_hk_ratio_min = if lc_min > 0.0 {
-                        Some(lc_min as f64)
-                    } else {
-                        None
-                    };
+                    state.config.lc_hk_ratio_min = if lc_min > 0.0 { Some(lc_min) } else { None };
                     config_changed = true;
                 }
-                let mut lc_max = state.config.lc_hk_ratio_max.unwrap_or(1.1) as f32;
+                let mut lc_max = state.config.lc_hk_ratio_max.unwrap_or(1.1);
                 ui.label("max:")
                     .on_hover_text("Max ratio of Lc / Lu. 0 = disabled");
                 if ui
                     .add(DragValue::new(&mut lc_max).speed(0.01).range(0.0..=2.0))
                     .changed()
                 {
-                    state.config.lc_hk_ratio_max = if lc_max > 0.0 {
-                        Some(lc_max as f64)
-                    } else {
-                        None
-                    };
+                    state.config.lc_hk_ratio_max = if lc_max > 0.0 { Some(lc_max) } else { None };
                     config_changed = true;
                 }
             });
             ui.horizontal(|ui| {
                 ui.label("weight:")
                     .on_hover_text("Weight for LC/HK ratio constraint");
-                let mut w = state.config.w_lc_hk_ratio as f32;
                 if ui
-                    .add(DragValue::new(&mut w).speed(10.0).range(0.0..=10000.0))
+                    .add(DragValue::new(&mut state.config.w_lc_hk_ratio).speed(10.0).range(0.0..=10000.0))
                     .changed()
                 {
-                    state.config.w_lc_hk_ratio = w as f64;
                     config_changed = true;
                 }
             });
@@ -219,12 +197,10 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
             ui.horizontal(|ui| {
                 ui.label("w_wheel_x:")
                     .on_hover_text("Weight for aligning wheel X across poses");
-                let mut w = state.config.w_wheel_x as f32;
                 if ui
-                    .add(DragValue::new(&mut w).speed(10.0).range(0.0..=10000.0))
+                    .add(DragValue::new(&mut state.config.w_wheel_x).speed(10.0).range(0.0..=10000.0))
                     .changed()
                 {
-                    state.config.w_wheel_x = w as f64;
                     config_changed = true;
                 }
             });
@@ -232,12 +208,10 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
             ui.horizontal(|ui| {
                 ui.label("w_wheel_x_mean:")
                     .on_hover_text("Weight for keeping mean wheel X near 0");
-                let mut w = state.config.w_wheel_x_mean as f32;
                 if ui
-                    .add(DragValue::new(&mut w).speed(10.0).range(0.0..=10000.0))
+                    .add(DragValue::new(&mut state.config.w_wheel_x_mean).speed(10.0).range(0.0..=10000.0))
                     .changed()
                 {
-                    state.config.w_wheel_x_mean = w as f64;
                     config_changed = true;
                 }
             });
@@ -249,22 +223,18 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
             ui.horizontal(|ui| {
                 ui.label("w_bc_x:")
                     .on_hover_text("Weight for biasing pin joint X toward zero");
-                let mut w_bc_x = state.config.w_bc_x as f32;
                 if ui
-                    .add(DragValue::new(&mut w_bc_x).speed(0.001).range(0.0..=1.0))
+                    .add(DragValue::new(&mut state.config.w_bc_x).speed(0.001).range(0.0..=1.0))
                     .changed()
                 {
-                    state.config.w_bc_x = w_bc_x as f64;
                     config_changed = true;
                 }
                 ui.label("w_bc_y:")
                     .on_hover_text("Weight for biasing pin joint Y toward zero");
-                let mut w_bc_y = state.config.w_bc_y as f32;
                 if ui
-                    .add(DragValue::new(&mut w_bc_y).speed(0.001).range(0.0..=1.0))
+                    .add(DragValue::new(&mut state.config.w_bc_y).speed(0.001).range(0.0..=1.0))
                     .changed()
                 {
-                    state.config.w_bc_y = w_bc_y as f64;
                     config_changed = true;
                 }
             });
@@ -273,7 +243,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
             ui.label("Knee angle (H-K-W):")
                 .on_hover_text("Angle constraint at the knee joint");
 
-            let mut max_angle_deg = state.config.max_angle_hkw.to_degrees() as f32;
+            let mut max_angle_deg = state.config.max_angle_hkw.to_degrees();
             ui.horizontal(|ui| {
                 ui.label("max_angle_hkw (deg):")
                     .on_hover_text("Maximum angle at knee between upper leg (H-K) and wheel direction (K-W). Penalized if exceeded");
@@ -281,7 +251,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .add(DragValue::new(&mut max_angle_deg).speed(1.0).range(90.0..=180.0))
                     .changed()
                 {
-                    state.config.max_angle_hkw = (max_angle_deg as f64).to_radians();
+                    state.config.max_angle_hkw = max_angle_deg.to_radians();
                     config_changed = true;
                 }
             });
@@ -293,12 +263,12 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
             ui.horizontal(|ui| {
                 ui.label("alpha_target (deg):")
                     .on_hover_text("Desired HKW angle at pose=1; internally constrains theta");
-                let mut alpha_deg = state.config.alpha_pose1_target.to_degrees() as f32;
+                let mut alpha_deg = state.config.alpha_pose1_target.to_degrees();
                 if ui
                     .add(DragValue::new(&mut alpha_deg).speed(1.0).range(0.0..=180.0))
                     .changed()
                 {
-                    state.config.alpha_pose1_target = (alpha_deg as f64).to_radians();
+                    state.config.alpha_pose1_target = alpha_deg.to_radians();
                     config_changed = true;
                 }
             });
@@ -306,12 +276,10 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
             ui.horizontal(|ui| {
                 ui.label("w_theta_pose1:")
                     .on_hover_text("Weight for pose=1 theta target derived from alpha");
-                let mut w = state.config.w_theta_pose1 as f32;
                 if ui
-                    .add(DragValue::new(&mut w).speed(10.0).range(0.0..=10000.0))
+                    .add(DragValue::new(&mut state.config.w_theta_pose1).speed(10.0).range(0.0..=10000.0))
                     .changed()
                 {
-                    state.config.w_theta_pose1 = w as f64;
                     config_changed = true;
                 }
             });
@@ -396,12 +364,10 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
             ui.horizontal(|ui| {
                 ui.label("w_jac_profile (takeoff):")
                     .on_hover_text("Weight for Jacobian profile tracking; higher -> stronger push toward jac_end / takeoff velocity");
-                let mut w = state.config.w_jac_profile as f32;
                 if ui
-                    .add(DragValue::new(&mut w).speed(10.0).range(0.0..=10000.0))
+                    .add(DragValue::new(&mut state.config.w_jac_profile).speed(10.0).range(0.0..=10000.0))
                     .changed()
                 {
-                    state.config.w_jac_profile = w as f64;
                     config_changed = true;
                 }
             });
@@ -409,7 +375,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
 
         // Theta constraints
         ui.collapsing("Theta Constraints", |ui| {
-            let mut theta_span_min = state.config.theta_span_min.to_degrees() as f32;
+            let mut theta_span_min = state.config.theta_span_min.to_degrees();
             ui.horizontal(|ui| {
                 ui.label("theta_span_min (deg):")
                     .on_hover_text("Minimum total hip angle rotation from crouch to extension. Ensures sufficient motor travel");
@@ -421,12 +387,12 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     )
                     .changed()
                 {
-                    state.config.theta_span_min = (theta_span_min as f64).to_radians();
+                    state.config.theta_span_min = theta_span_min.to_radians();
                     config_changed = true;
                 }
             });
 
-            let mut theta_step_min = state.config.theta_step_min.to_degrees() as f32;
+            let mut theta_step_min = state.config.theta_step_min.to_degrees();
             ui.horizontal(|ui| {
                 ui.label("theta_step_min (deg):")
                     .on_hover_text("Minimum angle change between adjacent poses. Prevents bunching of poses");
@@ -438,7 +404,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     )
                     .changed()
                 {
-                    state.config.theta_step_min = (theta_step_min as f64).to_radians();
+                    state.config.theta_step_min = theta_step_min.to_radians();
                     config_changed = true;
                 }
             });
@@ -446,7 +412,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
 
         // Motor section
         ui.collapsing("Motor", |ui| {
-            let mut omega = state.config.omega_max.unwrap_or(11.0) as f32;
+            let mut omega = state.config.omega_max.unwrap_or(11.0);
             ui.horizontal(|ui| {
                 ui.label("omega_max (rad/s):")
                     .on_hover_text("Maximum motor angular velocity. Used to estimate takeoff velocity. 0 = disabled");
@@ -454,11 +420,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .add(DragValue::new(&mut omega).speed(0.1).range(0.0..=50.0))
                     .changed()
                 {
-                    state.config.omega_max = if omega > 0.0 {
-                        Some(omega as f64)
-                    } else {
-                        None
-                    };
+                    state.config.omega_max = if omega > 0.0 { Some(omega) } else { None };
                     config_changed = true;
                 }
             });

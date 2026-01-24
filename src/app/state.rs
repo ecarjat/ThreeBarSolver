@@ -9,25 +9,25 @@ use std::path::Path;
 pub struct AppState {
     pub config: Config,
     pub solution: Option<Solution>,
-    pub current_pose_ratio: f32,
+    pub current_pose_ratio: f64,
     pub is_solving: bool,
     pub solver_error: Option<String>,
     pub save_message: Option<(String, bool)>, // (message, is_success)
-    pub cached_pose_ratio: Option<f32>,
+    pub cached_pose_ratio: Option<f64>,
     pub cached_pose: Option<PoseSolveResult>,
     pub plot_bounds: Option<PlotBounds>,
 
     // UI state for mm/m conversion (displayed in mm)
-    pub h_crouch_mm: f32,
-    pub h_ext_mm: f32,
-    pub kc_min_mm: f32,
-    pub kc_max_mm: f32,
-    pub bc_radius_max_mm: f32,
-    pub xbc_min_mm: f32,
-    pub jac_start_mm: f32,
-    pub jac_end_mm: f32,
-    pub jac_min_mm: f32,
-    pub jac_max_mm: f32,
+    pub h_crouch_mm: f64,
+    pub h_ext_mm: f64,
+    pub kc_min_mm: f64,
+    pub kc_max_mm: f64,
+    pub bc_radius_max_mm: f64,
+    pub xbc_min_mm: f64,
+    pub jac_start_mm: f64,
+    pub jac_end_mm: f64,
+    pub jac_min_mm: f64,
+    pub jac_max_mm: f64,
 
     // Ratio selection
     pub ratio_0: bool,
@@ -54,16 +54,16 @@ impl AppState {
         let ratio_100 = cfg.ratios.contains(&1.0);
 
         Self {
-            h_crouch_mm: (cfg.h_crouch * 1000.0) as f32,
-            h_ext_mm: (cfg.h_ext * 1000.0) as f32,
-            kc_min_mm: (cfg.kc_min * 1000.0) as f32,
-            kc_max_mm: (cfg.kc_max.unwrap_or(0.1) * 1000.0) as f32,
-            bc_radius_max_mm: (cfg.bc_radius_max.unwrap_or(0.1) * 1000.0) as f32,
-            xbc_min_mm: (cfg.xbc_min.unwrap_or(0.0) * 1000.0) as f32,
-            jac_start_mm: (cfg.jac_start * 1000.0) as f32,
-            jac_end_mm: (cfg.jac_end * 1000.0) as f32,
-            jac_min_mm: (cfg.jac_min * 1000.0) as f32,
-            jac_max_mm: (cfg.jac_max * 1000.0) as f32,
+            h_crouch_mm: cfg.h_crouch * 1000.0,
+            h_ext_mm: cfg.h_ext * 1000.0,
+            kc_min_mm: cfg.kc_min * 1000.0,
+            kc_max_mm: cfg.kc_max.unwrap_or(0.1) * 1000.0,
+            bc_radius_max_mm: cfg.bc_radius_max.unwrap_or(0.1) * 1000.0,
+            xbc_min_mm: cfg.xbc_min.unwrap_or(0.0) * 1000.0,
+            jac_start_mm: cfg.jac_start * 1000.0,
+            jac_end_mm: cfg.jac_end * 1000.0,
+            jac_min_mm: cfg.jac_min * 1000.0,
+            jac_max_mm: cfg.jac_max * 1000.0,
             ratio_0,
             ratio_25,
             ratio_50,
@@ -113,24 +113,24 @@ impl AppState {
 
     /// Sync config from UI values
     pub fn sync_config_from_ui(&mut self) {
-        self.config.h_crouch = (self.h_crouch_mm / 1000.0) as f64;
-        self.config.h_ext = (self.h_ext_mm / 1000.0) as f64;
-        self.config.kc_min = (self.kc_min_mm / 1000.0) as f64;
+        self.config.h_crouch = self.h_crouch_mm / 1000.0;
+        self.config.h_ext = self.h_ext_mm / 1000.0;
+        self.config.kc_min = self.kc_min_mm / 1000.0;
         self.config.kc_max = if self.kc_max_mm > 0.0 {
-            Some((self.kc_max_mm / 1000.0) as f64)
+            Some(self.kc_max_mm / 1000.0)
         } else {
             None
         };
         self.config.bc_radius_max = if self.bc_radius_max_mm > 0.0 {
-            Some((self.bc_radius_max_mm / 1000.0) as f64)
+            Some(self.bc_radius_max_mm / 1000.0)
         } else {
             None
         };
-        self.config.xbc_min = Some((self.xbc_min_mm / 1000.0) as f64);
-        self.config.jac_start = (self.jac_start_mm / 1000.0) as f64;
-        self.config.jac_end = (self.jac_end_mm / 1000.0) as f64;
-        self.config.jac_min = (self.jac_min_mm / 1000.0) as f64;
-        self.config.jac_max = (self.jac_max_mm / 1000.0) as f64;
+        self.config.xbc_min = Some(self.xbc_min_mm / 1000.0);
+        self.config.jac_start = self.jac_start_mm / 1000.0;
+        self.config.jac_end = self.jac_end_mm / 1000.0;
+        self.config.jac_min = self.jac_min_mm / 1000.0;
+        self.config.jac_max = self.jac_max_mm / 1000.0;
 
         // Build ratios from checkboxes
         let mut ratios = Vec::new();

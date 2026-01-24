@@ -29,7 +29,7 @@ pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
     };
 
     if should_recompute {
-        let pose = interpolate_pose_for_ratio(&state.config, solution, ratio as f64);
+        let pose = interpolate_pose_for_ratio(&state.config, solution, ratio);
         state.cached_pose_ratio = Some(ratio);
         state.cached_pose = Some(pose);
     }

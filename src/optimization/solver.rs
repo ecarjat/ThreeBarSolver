@@ -17,18 +17,51 @@ use std::collections::BTreeMap;
 use std::f64::consts::PI;
 use std::sync::Arc;
 
+// Global optimization constants
 const GLOBAL_INFEASIBLE_COST: f64 = 1.0e12;
 const GLOBAL_POSE_TOL: f64 = 1.0e-4;
 
+// RNG seeding constants
+const RNG_SEED_MULTIPLIER: u64 = 1337;
+const RNG_SEED_OFFSET: u64 = 11;
+
+// Initial seed generation
+const MIN_LEN_SCALE: f64 = 0.05;
+const MAX_LEN_SCALE: f64 = 3.0;
+const PIN_JOINT_X_CENTER: f64 = 0.5;
+const PIN_JOINT_Y_CENTER: f64 = 0.3;
+const PIN_JOINT_SCALE: f64 = 0.6;
+
+// Local optimization (Nelder-Mead)
+const SIMPLEX_DELTA_SCALE: f64 = 0.05;
+const NELDER_MEAD_SD_TOL: f64 = 1e-8;
+const LOCAL_MAX_ITERS: u64 = 20000;
+
+// Differential Evolution
+const DE_MUTATION_FACTOR: f64 = 0.7;
+const DE_CROSSOVER_PROB: f64 = 0.9;
+const DE_FEASIBLE_TRIES: usize = 8;
+const MAX_DISTINCT_TRIES: usize = 100;
+
+// Pose solving
+const POSE_SWEEP_STEPS: usize = 720;
+const BISECTION_ITERS: usize = 40;
+const POSE_SUCCESS_TOL: f64 = 1e-4;
+
+// Geometric tolerances
+const GEOMETRIC_EPS: f64 = 1e-9;
+
 /// Generate initial seed for multi-start optimization
 pub fn generate_initial_seed(cfg: &Config, seed_idx: usize) -> Vec<f64> {
-    let mut rng = ChaCha8Rng::seed_from_u64((seed_idx * 1337 + 11) as u64);
+    let mut rng = ChaCha8Rng::seed_from_u64(
+        seed_idx as u64 * RNG_SEED_MULTIPLIER + RNG_SEED_OFFSET,
+    );
 
     let scale = cfg.h_crouch.abs().max(cfg.h_ext.abs()).max(0.2);
     let mut poses = BTreeMap::new();
 
-    let min_len = 0.05 * scale;
-    let max_len = 3.0 * scale;
+    let min_len = MIN_LEN_SCALE * scale;
+    let max_len = MAX_LEN_SCALE * scale;
     let lu = rng.gen_range(min_len..max_len);
     let lkw = rng.gen_range(min_len..max_len);
 
@@ -39,8 +72,8 @@ pub fn generate_initial_seed(cfg: &Config, seed_idx: usize) -> Vec<f64> {
     }
 
     let lc = rng.gen_range(min_len..max_len);
-    let xbc = (rng.gen::<f64>() - 0.5) * 0.6 * scale;
-    let ybc = (rng.gen::<f64>() - 0.3) * 0.6 * scale;
+    let xbc = (rng.gen::<f64>() - PIN_JOINT_X_CENTER) * PIN_JOINT_SCALE * scale;
+    let ybc = (rng.gen::<f64>() - PIN_JOINT_Y_CENTER) * PIN_JOINT_SCALE * scale;
     let pin_joint = PinJointLocation { x: xbc, y: ybc };
     let lengths = Lengths {
         upper_leg_hk: lu,
@@ -115,14 +148,14 @@ pub fn solve_local(cfg: &Config, x0: Vec<f64>) -> (Vec<f64>, f64, bool) {
         .map(|i| {
             let mut p = x0_clamped.clone();
             if i > 0 {
-                let delta = 0.05 * (bounds.upper[i - 1] - bounds.lower[i - 1]);
-                p[i - 1] = (p[i - 1] + delta).min(bounds.upper[i - 1] - 1e-9);
+                let delta = SIMPLEX_DELTA_SCALE * (bounds.upper[i - 1] - bounds.lower[i - 1]);
+                p[i - 1] = (p[i - 1] + delta).min(bounds.upper[i - 1] - GEOMETRIC_EPS);
             }
             p
         })
         .collect();
 
-    let solver = match NelderMead::new(simplex).with_sd_tolerance(1e-8) {
+    let solver = match NelderMead::new(simplex).with_sd_tolerance(NELDER_MEAD_SD_TOL) {
         Ok(s) => s,
         Err(_) => {
             let cost = crate::optimization::residuals::cost(&x0_clamped, cfg);
@@ -131,7 +164,7 @@ pub fn solve_local(cfg: &Config, x0: Vec<f64>) -> (Vec<f64>, f64, bool) {
     };
 
     let result = Executor::new(problem, solver)
-        .configure(|state: IterState<Vec<f64>, (), (), (), (), f64>| state.max_iters(20000))
+        .configure(|state: IterState<Vec<f64>, (), (), (), (), f64>| state.max_iters(LOCAL_MAX_ITERS))
         .run();
 
     match result {
@@ -261,7 +294,7 @@ fn solve_global_de(cfg: &Config) -> (Vec<f64>, f64) {
                 x[i] = lo + rng.gen::<f64>() * (hi - lo);
             }
             tries += 1;
-            if is_feasible_global(&x, cfg, pose_tol) || tries >= 8 {
+            if is_feasible_global(&x, cfg, pose_tol) || tries >= DE_FEASIBLE_TRIES {
                 break;
             }
         }
@@ -276,8 +309,8 @@ fn solve_global_de(cfg: &Config) -> (Vec<f64>, f64) {
         .map(|(i, _)| i)
         .unwrap_or(0);
 
-    let f = 0.7;
-    let cr = 0.9;
+    let f = DE_MUTATION_FACTOR;
+    let cr = DE_CROSSOVER_PROB;
 
     for _ in 0..cfg.global_maxiter.max(1) {
         let prev_best = costs[best_idx];
@@ -337,10 +370,8 @@ fn pick_three_distinct(
         return (a, b, c);
     }
 
-    const MAX_TRIES: usize = 100;
-
     let mut a = rng.gen_range(0..n);
-    for _ in 0..MAX_TRIES {
+    for _ in 0..MAX_DISTINCT_TRIES {
         if a != exclude {
             break;
         }
@@ -352,7 +383,7 @@ fn pick_three_distinct(
     }
 
     let mut b = rng.gen_range(0..n);
-    for _ in 0..MAX_TRIES {
+    for _ in 0..MAX_DISTINCT_TRIES {
         if b != exclude && b != a {
             break;
         }
@@ -369,7 +400,7 @@ fn pick_three_distinct(
     }
 
     let mut c = rng.gen_range(0..n);
-    for _ in 0..MAX_TRIES {
+    for _ in 0..MAX_DISTINCT_TRIES {
         if c != exclude && c != a && c != b {
             break;
         }
@@ -437,7 +468,7 @@ fn build_solution(x: &[f64], cost: f64, success: bool, cfg: &Config) -> Solution
             wheel_ys.push(w.y);
             hip_thetas.push(theta);
 
-            let pose_crossing = segments_intersect_strict(&h, &k, &bc, &c, 1e-9);
+            let pose_crossing = segments_intersect_strict(&h, &k, &bc, &c, GEOMETRIC_EPS);
 
             poses.push(Pose {
                 ratio,
@@ -526,7 +557,7 @@ fn compute_jump_report(wheel_ys: &[f64], hip_thetas: &[f64], cfg: &Config) -> Ju
     for i in 0..(wheel_ys.len() - 1) {
         let dy = wheel_ys[i + 1] - wheel_ys[i];
         let dtheta = wrap_pi(hip_thetas[i + 1] - hip_thetas[i]);
-        if dtheta.abs() >= 1e-9 {
+        if dtheta.abs() >= GEOMETRIC_EPS {
             js.push(dy / dtheta);
         }
     }
@@ -582,13 +613,12 @@ pub fn solve_pose_ratio(
     });
     let mut preferred_c = seed_kc.map(|(_, c)| c);
 
-    let steps = 720;
     let mut best: Option<(Vector2<f64>, Vector2<f64>, Vector2<f64>, f64)> = None;
     let mut prev: Option<(f64, Vector2<f64>, f64)> = None;
     let mut best_bracket: Option<(f64, f64, Vector2<f64>)> = None;
 
-    for i in 0..=steps {
-        let t = i as f64 / steps as f64;
+    for i in 0..=POSE_SWEEP_STEPS {
+        let t = i as f64 / POSE_SWEEP_STEPS as f64;
         let theta = -PI + 2.0 * PI * t;
         if let Some((k, c, w, f)) =
             eval_pose_for_theta(theta, &bc, lu, lkc, lc, lkw, target_y, preferred_c.as_ref())
@@ -621,7 +651,7 @@ pub fn solve_pose_ratio(
             })
             .unwrap_or(0.0);
 
-        for _ in 0..40 {
+        for _ in 0..BISECTION_ITERS {
             let mid = 0.5 * (lo + hi);
             if let Some((k, c, w, f_mid)) =
                 eval_pose_for_theta(mid, &bc, lu, lkc, lc, lkw, target_y, Some(&pref_c))
@@ -647,9 +677,9 @@ pub fn solve_pose_ratio(
         f64::INFINITY,
     ));
 
-    let crossing = segments_intersect_strict(&h, &k, &bc, &c, 1e-9);
+    let crossing = segments_intersect_strict(&h, &k, &bc, &c, GEOMETRIC_EPS);
     let cost = f * f;
-    let success = f.is_finite() && f.abs() < 1e-4 && !crossing;
+    let success = f.is_finite() && f.abs() < POSE_SUCCESS_TOL && !crossing;
 
     PoseSolveResult {
         success,
