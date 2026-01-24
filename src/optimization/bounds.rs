@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::optimization::packing::num_variables;
+use std::f64::consts::PI;
 
 /// Variable bounds for optimization
 #[derive(Debug, Clone)]
@@ -21,7 +22,13 @@ pub fn build_bounds(cfg: &Config) -> Bounds {
     let mut lower = vec![-max_extent; n_vars];
     let mut upper = vec![max_extent; n_vars];
 
-    let len_start = n_ratios * 4;
+    // Pose angle bounds
+    for i in 0..n_ratios {
+        lower[i] = -PI;
+        upper[i] = PI;
+    }
+
+    let len_start = n_ratios;
 
     // Length bounds [Lu, Lkw, Lkc, Lc]
     for i in 0..4 {

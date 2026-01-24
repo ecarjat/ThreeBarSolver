@@ -213,6 +213,36 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
             });
 
             ui.add_space(5.0);
+            ui.label("Wheel X bias:")
+                .on_hover_text("Penalize mean wheel X offset from 0");
+
+            ui.horizontal(|ui| {
+                ui.label("w_wheel_x:")
+                    .on_hover_text("Weight for aligning wheel X across poses");
+                let mut w = state.config.w_wheel_x as f32;
+                if ui
+                    .add(DragValue::new(&mut w).speed(10.0).range(0.0..=10000.0))
+                    .changed()
+                {
+                    state.config.w_wheel_x = w as f64;
+                    config_changed = true;
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("w_wheel_x_mean:")
+                    .on_hover_text("Weight for keeping mean wheel X near 0");
+                let mut w = state.config.w_wheel_x_mean as f32;
+                if ui
+                    .add(DragValue::new(&mut w).speed(10.0).range(0.0..=10000.0))
+                    .changed()
+                {
+                    state.config.w_wheel_x_mean = w as f64;
+                    config_changed = true;
+                }
+            });
+
+            ui.add_space(5.0);
             ui.label("Pin joint bias:")
                 .on_hover_text("Weights to keep pin joint near origin");
 
@@ -229,6 +259,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                 }
                 ui.label("w_bc_y:")
                     .on_hover_text("Weight for biasing pin joint Y toward zero");
+                let mut w_bc_y = state.config.w_bc_y as f32;
                 if ui
                     .add(DragValue::new(&mut w_bc_y).speed(0.001).range(0.0..=1.0))
                     .changed()
@@ -251,6 +282,36 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     .changed()
                 {
                     state.config.max_angle_hkw = (max_angle_deg as f64).to_radians();
+                    config_changed = true;
+                }
+            });
+
+            ui.add_space(5.0);
+            ui.label("Pose=1 alpha target:")
+                .on_hover_text("Target HKW angle at pose ratio = 1.0 (input in degrees)");
+
+            ui.horizontal(|ui| {
+                ui.label("alpha_target (deg):")
+                    .on_hover_text("Desired HKW angle at pose=1; internally constrains theta");
+                let mut alpha_deg = state.config.alpha_pose1_target.to_degrees() as f32;
+                if ui
+                    .add(DragValue::new(&mut alpha_deg).speed(1.0).range(0.0..=180.0))
+                    .changed()
+                {
+                    state.config.alpha_pose1_target = (alpha_deg as f64).to_radians();
+                    config_changed = true;
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("w_theta_pose1:")
+                    .on_hover_text("Weight for pose=1 theta target derived from alpha");
+                let mut w = state.config.w_theta_pose1 as f32;
+                if ui
+                    .add(DragValue::new(&mut w).speed(10.0).range(0.0..=10000.0))
+                    .changed()
+                {
+                    state.config.w_theta_pose1 = w as f64;
                     config_changed = true;
                 }
             });
@@ -335,36 +396,36 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
 
         // Theta constraints
         ui.collapsing("Theta Constraints", |ui| {
-            let mut theta_span_min = state.config.theta_span_min as f32;
+            let mut theta_span_min = state.config.theta_span_min.to_degrees() as f32;
             ui.horizontal(|ui| {
-                ui.label("theta_span_min (rad):")
+                ui.label("theta_span_min (deg):")
                     .on_hover_text("Minimum total hip angle rotation from crouch to extension. Ensures sufficient motor travel");
                 if ui
                     .add(
                         DragValue::new(&mut theta_span_min)
-                            .speed(0.01)
-                            .range(0.0..=3.14),
+                            .speed(1.0)
+                            .range(0.0..=180.0),
                     )
                     .changed()
                 {
-                    state.config.theta_span_min = theta_span_min as f64;
+                    state.config.theta_span_min = (theta_span_min as f64).to_radians();
                     config_changed = true;
                 }
             });
 
-            let mut theta_step_min = state.config.theta_step_min as f32;
+            let mut theta_step_min = state.config.theta_step_min.to_degrees() as f32;
             ui.horizontal(|ui| {
-                ui.label("theta_step_min (rad):")
+                ui.label("theta_step_min (deg):")
                     .on_hover_text("Minimum angle change between adjacent poses. Prevents bunching of poses");
                 if ui
                     .add(
                         DragValue::new(&mut theta_step_min)
-                            .speed(0.001)
-                            .range(0.0..=0.5),
+                            .speed(0.1)
+                            .range(0.0..=30.0),
                     )
                     .changed()
                 {
-                    state.config.theta_step_min = theta_step_min as f64;
+                    state.config.theta_step_min = (theta_step_min as f64).to_radians();
                     config_changed = true;
                 }
             });
@@ -397,7 +458,7 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                 ui.label("n_starts:")
                     .on_hover_text("Number of random starting points for multi-start optimization. More = better solutions but slower");
                 if ui
-                    .add(DragValue::new(&mut n_starts).speed(1).range(1..=32))
+                    .add(DragValue::new(&mut n_starts).speed(1).range(1..=128))
                     .changed()
                 {
                     state.config.n_starts = n_starts as usize;

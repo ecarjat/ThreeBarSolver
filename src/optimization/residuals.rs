@@ -1,7 +1,7 @@
 use crate::config::Config;
-use crate::geometry::{dist, seg_seg_distance, wrap_pi};
-use crate::linkage::{bc_from_params, compute_wheel, height_for_ratio};
-use crate::optimization::packing::{unpack_pose_vars, unpack_vars};
+use crate::geometry::{seg_seg_distance, wrap_pi};
+use crate::linkage::{bc_from_params, eval_pose_for_theta, height_for_ratio};
+use crate::optimization::packing::unpack_vars;
 use nalgebra::Vector2;
 
 /// Compute residual vector for the full optimization problem
@@ -56,26 +56,41 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
     let mut wheels = Vec::new();
     let mut wheel_ys = Vec::new();
     let mut hip_thetas = Vec::new();
+    let mut preferred_c: Option<Vector2<f64>> = None;
+    let mut infeasible = false;
 
     // Sort poses by ratio
     let mut ratios_sorted: Vec<_> = cfg.ratios.iter().copied().enumerate().collect();
     ratios_sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
     for (idx, ratio) in &ratios_sorted {
-        let (k, c) = vars.poses.get(idx).unwrap();
-        let w = compute_wheel(k, c, vars.lkw);
+        let theta = *vars.poses.get(idx).unwrap();
+        let target_y = height_for_ratio(cfg, *ratio);
+        let (k, c, w, f) = match eval_pose_for_theta(
+            theta,
+            &bc,
+            vars.lu,
+            vars.lkc,
+            vars.lc,
+            vars.lkw,
+            target_y,
+            preferred_c.as_ref(),
+        ) {
+            Some(result) => result,
+            None => {
+                infeasible = true;
+                r.push(1e6);
+                continue;
+            }
+        };
+
+        preferred_c = Some(c.clone());
         wheels.push(w);
         wheel_ys.push(w.y);
-        hip_thetas.push((k.y - h.y).atan2(k.x - h.x));
-
-        // Length constraints
-        r.push((dist(&h, k) - vars.lu) * cfg.w_len);
-        r.push((dist(k, c) - vars.lkc) * cfg.w_len);
-        r.push((dist(&bc, c) - vars.lc) * cfg.w_len);
+        hip_thetas.push(theta);
 
         // Pose target
-        let target_y = height_for_ratio(cfg, *ratio);
-        r.push((w.y - target_y) * cfg.w_pose);
+        r.push(f * cfg.w_pose);
 
         // Knee above wheel
         let knee_violation = (k.y - w.y + cfg.knee_above_margin).max(0.0);
@@ -87,7 +102,7 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
         r.push((-w.y).max(0.0) * cfg.w_below);
 
         // Crossing prevention
-        let d_cross = seg_seg_distance(&h, k, &bc, c);
+        let d_cross = seg_seg_distance(&h, &k, &bc, &c);
         let cross_violation = (cfg.cross_min - d_cross).max(0.0);
         let cross_scale = cross_violation / cfg.cross_min.max(1e-9);
         r.push(cross_scale * cfg.w_no_cross);
@@ -97,12 +112,92 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
         let vec_kw = w - k;
         let len_kh = vec_kh.norm();
         let len_kw = vec_kw.norm();
-        if len_kh > 1e-9 && len_kw > 1e-9 {
-            let cos_angle = vec_kh.dot(&vec_kw) / (len_kh * len_kw);
-            let angle_hkw = cos_angle.clamp(-1.0, 1.0).acos();
+        let alpha = if len_kh > 1e-9 && len_kw > 1e-9 {
+            let cos_angle = (vec_kh.dot(&vec_kw) / (len_kh * len_kw)).clamp(-1.0, 1.0);
+            Some(cos_angle.acos())
+        } else {
+            None
+        };
+        if let Some(angle_hkw) = alpha {
             let angle_violation = (angle_hkw - cfg.max_angle_hkw).max(0.0);
             r.push(angle_violation * cfg.w_angle_hkw);
         }
+
+        // Pose=1 theta target (alpha input)
+        if (ratio - 1.0).abs() < 1e-9 && cfg.w_theta_pose1 > 0.0 {
+            if let Some(alpha_current) = alpha {
+                let alpha_target = cfg.alpha_pose1_target;
+                let alpha_error = alpha_current - alpha_target;
+
+                let eps = 1e-4;
+                let alpha_prev = eval_pose_for_theta(
+                    theta - eps,
+                    &bc,
+                    vars.lu,
+                    vars.lkc,
+                    vars.lc,
+                    vars.lkw,
+                    target_y,
+                    Some(&c),
+                )
+                .map(|(k_p, _c_p, w_p, _)| {
+                    let v_kh = h - k_p;
+                    let v_kw = w_p - k_p;
+                    let len_kh = v_kh.norm();
+                    let len_kw = v_kw.norm();
+                    if len_kh > 1e-9 && len_kw > 1e-9 {
+                        let cos_angle =
+                            (v_kh.dot(&v_kw) / (len_kh * len_kw)).clamp(-1.0, 1.0);
+                        Some(cos_angle.acos())
+                    } else {
+                        None
+                    }
+                })
+                .flatten();
+
+                let alpha_next = eval_pose_for_theta(
+                    theta + eps,
+                    &bc,
+                    vars.lu,
+                    vars.lkc,
+                    vars.lc,
+                    vars.lkw,
+                    target_y,
+                    Some(&c),
+                )
+                .map(|(k_n, _c_n, w_n, _)| {
+                    let v_kh = h - k_n;
+                    let v_kw = w_n - k_n;
+                    let len_kh = v_kh.norm();
+                    let len_kw = v_kw.norm();
+                    if len_kh > 1e-9 && len_kw > 1e-9 {
+                        let cos_angle =
+                            (v_kh.dot(&v_kw) / (len_kh * len_kw)).clamp(-1.0, 1.0);
+                        Some(cos_angle.acos())
+                    } else {
+                        None
+                    }
+                })
+                .flatten();
+
+                let theta_error = if let (Some(a0), Some(a1)) = (alpha_prev, alpha_next) {
+                    let dalpha = a1 - a0;
+                    if dalpha.abs() > 1e-6 {
+                        alpha_error / (dalpha / (2.0 * eps))
+                    } else {
+                        alpha_error
+                    }
+                } else {
+                    alpha_error
+                };
+
+                r.push(theta_error * cfg.w_theta_pose1);
+            }
+        }
+    }
+
+    if infeasible {
+        return r;
     }
 
     // Wheel X alignment
@@ -172,84 +267,5 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
 /// Compute cost (sum of squared residuals)
 pub fn cost(x: &[f64], cfg: &Config) -> f64 {
     let r = residuals(x, cfg);
-    r.iter().map(|v| v * v).sum()
-}
-
-/// Compute residuals for single pose optimization
-pub fn pose_residuals(
-    x: &[f64],
-    cfg: &Config,
-    bc: &Vector2<f64>,
-    lu: f64,
-    lkc: f64,
-    lc: f64,
-    lkw: f64,
-    target_y: f64,
-) -> Vec<f64> {
-    let vars = unpack_pose_vars(x);
-    let h = Vector2::new(0.0, 0.0);
-    let k = &vars.k;
-    let c = &vars.c;
-    let w = compute_wheel(k, c, lkw);
-
-    let mut r: Vec<f64> = Vec::with_capacity(12);
-
-    // Length constraints
-    r.push((dist(&h, k) - lu) * cfg.w_len);
-    r.push((dist(k, c) - lkc) * cfg.w_len);
-    r.push((dist(bc, c) - lc) * cfg.w_len);
-
-    // Pose target
-    r.push((w.y - target_y) * cfg.w_pose);
-
-    // Wheel X position
-    r.push(w.x * cfg.w_wheel_x);
-
-    // Knee above wheel
-    let knee_violation = (k.y - w.y + cfg.knee_above_margin).max(0.0);
-    r.push(knee_violation * cfg.w_knee_above_wheel);
-
-    // Below ground penalties
-    r.push((-k.y).max(0.0) * cfg.w_below);
-    r.push((-c.y).max(0.0) * cfg.w_below);
-    r.push((-w.y).max(0.0) * cfg.w_below);
-
-    // Crossing prevention
-    let d_cross = seg_seg_distance(&h, k, bc, c);
-    let cross_violation = (cfg.cross_min - d_cross).max(0.0);
-    let cross_scale = cross_violation / cfg.cross_min.max(1e-9);
-    r.push(cross_scale * cfg.w_no_cross);
-
-    // Knee angle constraint (angle H-K-W)
-    let vec_kh = h - k;
-    let vec_kw = w - k;
-    let len_kh = vec_kh.norm();
-    let len_kw = vec_kw.norm();
-    if len_kh > 1e-9 && len_kw > 1e-9 {
-        let cos_angle = vec_kh.dot(&vec_kw) / (len_kh * len_kw);
-        let angle_hkw = cos_angle.clamp(-1.0, 1.0).acos();
-        let angle_violation = (angle_hkw - cfg.max_angle_hkw).max(0.0);
-        r.push(angle_violation * cfg.w_angle_hkw);
-    }
-
-    // Regularization
-    let norm = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2] + x[3] * x[3]).sqrt();
-    r.push(1e-3 * norm);
-
-    r
-}
-
-/// Compute cost for single pose optimization
-pub fn pose_cost(
-    x: &[f64],
-    cfg: &Config,
-    bc: &Vector2<f64>,
-    lu: f64,
-    lkc: f64,
-    lc: f64,
-    lkw: f64,
-    target_y: f64,
-) -> f64 {
-    let r = pose_residuals(x, cfg, bc, lu, lkc, lc, lkw, target_y);
     r.iter().map(|v| v * v).sum()
 }

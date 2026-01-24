@@ -1,16 +1,14 @@
 use crate::config::Config;
-use crate::types::Point2D;
-use nalgebra::Vector2;
 use std::collections::BTreeMap;
 
 /// Variable layout for N ratios:
-/// [K0_x, K0_y, C0_x, C0_y, K1_x, K1_y, C1_x, C1_y, ..., Lu, Lkw, Lkc, Lc, xbc, ybc]
-/// Total: N*4 + 6 variables
+/// [theta0, theta1, ..., thetaN-1, Lu, Lkw, Lkc, Lc, xbc, ybc]
+/// Total: N + 6 variables
 
 /// Unpacked optimization variables
 #[derive(Debug, Clone)]
 pub struct UnpackedVars {
-    pub poses: BTreeMap<usize, (Point2D, Point2D)>, // index -> (K, C)
+    pub poses: BTreeMap<usize, f64>, // index -> theta (hip angle)
     pub lu: f64,                                     // Upper leg length H-K
     pub lkw: f64,                                    // Lower leg length K-W
     pub lkc: f64,                                    // Inner joint offset K-C
@@ -22,12 +20,12 @@ pub struct UnpackedVars {
 /// Get the number of optimization variables for a given config
 #[inline]
 pub fn num_variables(cfg: &Config) -> usize {
-    cfg.ratios.len() * 4 + 6
+    cfg.ratios.len() + 6
 }
 
 /// Pack variables into a flat vector
 pub fn pack_vars(
-    poses: &BTreeMap<usize, (Point2D, Point2D)>,
+    poses: &BTreeMap<usize, f64>,
     lu: f64,
     lkw: f64,
     lkc: f64,
@@ -41,13 +39,10 @@ pub fn pack_vars(
 
     let mut idx = 0;
     for i in 0..cfg.ratios.len() {
-        if let Some((k, c)) = poses.get(&i) {
-            x[idx] = k.x;
-            x[idx + 1] = k.y;
-            x[idx + 2] = c.x;
-            x[idx + 3] = c.y;
+        if let Some(theta) = poses.get(&i) {
+            x[idx] = *theta;
         }
-        idx += 4;
+        idx += 1;
     }
 
     x[idx] = lu;
@@ -66,10 +61,8 @@ pub fn unpack_vars(x: &[f64], cfg: &Config) -> UnpackedVars {
     let mut idx = 0;
 
     for i in 0..cfg.ratios.len() {
-        let k = Vector2::new(x[idx], x[idx + 1]);
-        let c = Vector2::new(x[idx + 2], x[idx + 3]);
-        poses.insert(i, (k, c));
-        idx += 4;
+        poses.insert(i, x[idx]);
+        idx += 1;
     }
 
     UnpackedVars {
@@ -83,21 +76,6 @@ pub fn unpack_vars(x: &[f64], cfg: &Config) -> UnpackedVars {
     }
 }
 
-/// Unpacked pose variables (4D: Kx, Ky, Cx, Cy)
-#[derive(Debug, Clone)]
-pub struct UnpackedPoseVars {
-    pub k: Point2D,
-    pub c: Point2D,
-}
-
-/// Unpack pose variables from a 4D vector
-pub fn unpack_pose_vars(x: &[f64]) -> UnpackedPoseVars {
-    UnpackedPoseVars {
-        k: Vector2::new(x[0], x[1]),
-        c: Vector2::new(x[2], x[3]),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,9 +84,9 @@ mod tests {
     fn test_pack_unpack_roundtrip() {
         let cfg = Config::default();
         let mut poses = BTreeMap::new();
-        poses.insert(0, (Vector2::new(0.1, 0.2), Vector2::new(0.3, 0.4)));
-        poses.insert(1, (Vector2::new(0.5, 0.6), Vector2::new(0.7, 0.8)));
-        poses.insert(2, (Vector2::new(0.9, 1.0), Vector2::new(1.1, 1.2)));
+        poses.insert(0, -0.8);
+        poses.insert(1, 0.1);
+        poses.insert(2, 1.2);
 
         let lu = 0.3;
         let lkw = 0.2;
@@ -120,6 +98,9 @@ mod tests {
         let packed = pack_vars(&poses, lu, lkw, lkc, lc, xbc, ybc, &cfg);
         let unpacked = unpack_vars(&packed, &cfg);
 
+        assert!((unpacked.poses[&0] - poses[&0]).abs() < 1e-10);
+        assert!((unpacked.poses[&1] - poses[&1]).abs() < 1e-10);
+        assert!((unpacked.poses[&2] - poses[&2]).abs() < 1e-10);
         assert!((unpacked.lu - lu).abs() < 1e-10);
         assert!((unpacked.lkw - lkw).abs() < 1e-10);
         assert!((unpacked.lkc - lkc).abs() < 1e-10);

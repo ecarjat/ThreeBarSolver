@@ -5,7 +5,9 @@ use serde_json::Value;
 /// Version history:
 /// - v1: Initial version
 /// - v2: Added weight controls to UI (weights were always in config, now user-editable)
-pub const PARAMS_VERSION: u32 = 2;
+/// - v3: Exposed wheel X weights in UI (ensure saved/loaded with defaults)
+/// - v4: Added pose=1 theta target (alpha input) constraint parameters
+pub const PARAMS_VERSION: u32 = 4;
 
 /// Parameters file path
 pub const PARAMS_FILE: &str = "params.json";
@@ -25,6 +27,26 @@ impl VersionedParams {
         }
     }
 
+    fn merge_with_defaults(config_value: &Value) -> Result<Config, String> {
+        let defaults = serde_json::to_value(Config::default())
+            .map_err(|e| format!("Failed to serialize defaults: {}", e))?;
+
+        let merged = match (config_value.clone(), defaults) {
+            (Value::Object(mut cfg), Value::Object(defaults)) => {
+                for (key, value) in defaults {
+                    cfg.entry(key).or_insert(value);
+                }
+                Value::Object(cfg)
+            }
+            _ => {
+                return Err("Invalid config format in params.json".to_string());
+            }
+        };
+
+        serde_json::from_value(merged)
+            .map_err(|e| format!("Failed to parse config: {}", e))
+    }
+
     /// Migrate from an older version to the current version
     /// Returns the migrated config or an error
     pub fn migrate(json_value: Value) -> Result<Config, String> {
@@ -39,27 +61,31 @@ impl VersionedParams {
 
         match version {
             1 => {
-                // v1 -> v2: No schema changes, weights already existed
-                // Just parse with defaults for any missing fields
-                let config: Config = serde_json::from_value(config_value.clone())
-                    .map_err(|e| format!("Failed to parse v1 config: {}", e))?;
-                eprintln!("Migrated params.json from v1 to v2");
+                // v1 -> v4: Fill any missing fields from defaults
+                let config = Self::merge_with_defaults(config_value)?;
+                eprintln!("Migrated params.json from v1 to v4");
                 Ok(config)
             }
             2 => {
-                // Current version, no migration needed
-                let config: Config = serde_json::from_value(config_value.clone())
-                    .map_err(|e| format!("Failed to parse v2 config: {}", e))?;
+                // v2 -> v4: Fill any missing fields from defaults
+                let config = Self::merge_with_defaults(config_value)?;
+                eprintln!("Migrated params.json from v2 to v4");
                 Ok(config)
             }
+            3 => {
+                // v3 -> v4: Fill any missing fields from defaults
+                let config = Self::merge_with_defaults(config_value)?;
+                eprintln!("Migrated params.json from v3 to v4");
+                Ok(config)
+            }
+            4 => Self::merge_with_defaults(config_value),
             _ => {
                 // Unknown future version - try to parse anyway
                 eprintln!(
                     "Warning: params.json version {} is newer than supported version {}",
                     version, PARAMS_VERSION
                 );
-                let config: Config = serde_json::from_value(config_value.clone())
-                    .map_err(|e| format!("Failed to parse config: {}", e))?;
+                let config = Self::merge_with_defaults(config_value)?;
                 Ok(config)
             }
         }
@@ -106,6 +132,8 @@ pub struct Config {
     // Theta constraints
     pub theta_span_min: f64, // Min hip angle span (rad)
     pub theta_step_min: f64, // Min step between poses (rad)
+    pub alpha_pose1_target: f64, // Target HKW angle at pose=1 (rad)
+    pub w_theta_pose1: f64,       // Weight for pose=1 theta target (derived from alpha)
 
     // Link constraints
     pub kc_min: f64,                 // Min inner joint offset KC (m)
@@ -167,6 +195,8 @@ impl Default for Config {
             jac_max: 0.6,
             theta_span_min: 0.9,
             theta_step_min: 0.02,
+            alpha_pose1_target: 0.0,
+            w_theta_pose1: 0.0,
             kc_min: 0.05,
             kc_max: Some(0.1),
             cw_hk_ratio_min: Some(0.9),

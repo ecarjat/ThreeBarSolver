@@ -1,6 +1,6 @@
 use crate::config::Config;
-use crate::geometry::{dist, segments_intersect_strict, wrap_pi};
-use crate::linkage::{bc_from_params, compute_wheel, has_crossing, height_for_ratio};
+use crate::geometry::{segments_intersect_strict, wrap_pi};
+use crate::linkage::{bc_from_params, compute_wheel, eval_pose_for_theta, has_crossing, height_for_ratio};
 use crate::optimization::bounds::build_bounds;
 use crate::optimization::packing::{pack_vars, unpack_vars};
 use crate::optimization::problem::ThreeBarProblem;
@@ -23,36 +23,32 @@ pub fn generate_initial_seed(cfg: &Config, seed_idx: usize) -> Vec<f64> {
     let scale = cfg.h_crouch.abs().max(cfg.h_ext.abs()).max(0.2);
     let mut poses = BTreeMap::new();
 
-    for (i, ratio) in cfg.ratios.iter().enumerate() {
-        let target_y = height_for_ratio(cfg, *ratio);
-        let kx = (rng.gen::<f64>() - 0.5) * 0.2 * scale;
-        let ky = target_y * (0.55 + 0.15 * rng.gen::<f64>());
-        let c_offset = (0.15 + 0.25 * rng.gen::<f64>()) * scale;
-        let cx = kx + (rng.gen::<f64>() - 0.5) * 0.1 * scale;
-        let cy = (0.02 * scale).max(ky - c_offset);
+    let min_len = 0.05 * scale;
+    let max_len = 3.0 * scale;
+    let lu = rng.gen_range(min_len..max_len);
+    let lkw = rng.gen_range(min_len..max_len);
 
-        poses.insert(i, (Vector2::new(kx, ky), Vector2::new(cx, cy)));
+    let mut lkc = rng.gen_range(min_len..max_len);
+    lkc = lkc.max(cfg.kc_min);
+    if let Some(kc_max) = cfg.kc_max {
+        lkc = lkc.min(kc_max);
     }
 
-    // Reference pose for initial lengths
-    let ref_idx = cfg
-        .ratios
-        .iter()
-        .position(|&r| (r - 1.0).abs() < 1e-9)
-        .unwrap_or(cfg.ratios.len() - 1);
-    let ref_ratio = cfg.ratios[ref_idx];
-    let (k_ref, c_ref) = poses.get(&ref_idx).unwrap();
-    let w_ref = Vector2::new(0.0, height_for_ratio(cfg, ref_ratio));
-
-    let h = Vector2::new(0.0, 0.0);
-    let lu = dist(&h, k_ref);
-    let lkc = dist(k_ref, c_ref);
-    let lkw = (0.1 * scale).max(dist(k_ref, &w_ref));
-
+    let lc = rng.gen_range(min_len..max_len);
     let xbc = (rng.gen::<f64>() - 0.5) * 0.6 * scale;
     let ybc = (rng.gen::<f64>() - 0.3) * 0.6 * scale;
-    let bc = Vector2::new(xbc, ybc);
-    let lc = dist(&bc, c_ref);
+    let pin_joint = PinJointLocation { x: xbc, y: ybc };
+    let lengths = Lengths {
+        upper_leg_hk: lu,
+        lower_leg_kw: lkw,
+        link_bc_c: lc,
+    };
+
+    for (i, ratio) in cfg.ratios.iter().enumerate() {
+        let pose = solve_pose_ratio(cfg, &lengths, &pin_joint, lkc, *ratio, None);
+        let theta = pose.points.k.y.atan2(pose.points.k.x);
+        poses.insert(i, theta);
+    }
 
     pack_vars(&poses, lu, lkw, lkc, lc, xbc, ybc, cfg)
 }
@@ -118,12 +114,34 @@ pub fn solve_multistart(cfg: &Config) -> (Vec<f64>, f64) {
             // Check for crossing
             let vars = unpack_vars(&x_opt, cfg);
             let bc = bc_from_params(vars.xbc, vars.ybc, cfg);
-            let poses: Vec<_> = vars
-                .poses
-                .iter()
-                .map(|(idx, (k, c))| (cfg.ratios[*idx], *k, *c))
-                .collect();
-            let crossing = has_crossing(&poses, &bc);
+            let mut preferred_c: Option<Vector2<f64>> = None;
+            let mut poses_for_crossing = Vec::new();
+            let mut infeasible = false;
+            let mut ratios_sorted: Vec<_> = cfg.ratios.iter().copied().enumerate().collect();
+            ratios_sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+            for (idx, ratio) in ratios_sorted {
+                let theta = *vars.poses.get(&idx).unwrap_or(&0.0);
+                let target_y = height_for_ratio(cfg, ratio);
+                if let Some((k, c, _w, _f)) = eval_pose_for_theta(
+                    theta,
+                    &bc,
+                    vars.lu,
+                    vars.lkc,
+                    vars.lc,
+                    vars.lkw,
+                    target_y,
+                    preferred_c.as_ref(),
+                ) {
+                    poses_for_crossing.push((ratio, k, c));
+                    preferred_c = Some(c);
+                } else {
+                    infeasible = true;
+                    break;
+                }
+            }
+
+            let crossing = infeasible || has_crossing(&poses_for_crossing, &bc);
 
             (x_opt, cost, crossing)
         })
@@ -254,43 +272,66 @@ fn build_solution(x: &[f64], cost: f64, success: bool, cfg: &Config) -> Solution
     let bc = bc_from_params(vars.xbc, vars.ybc, cfg);
     let h = Vector2::new(0.0, 0.0);
 
-    // Check crossing
-    let poses_for_crossing: Vec<_> = vars
-        .poses
-        .iter()
-        .map(|(idx, (k, c))| (cfg.ratios[*idx], *k, *c))
-        .collect();
-    let crossing = has_crossing(&poses_for_crossing, &bc);
-
     // Build poses
     let mut poses = Vec::new();
     let mut wheel_xs = Vec::new();
     let mut wheel_ys = Vec::new();
     let mut hip_thetas = Vec::new();
+    let mut preferred_c: Option<Vector2<f64>> = None;
+    let mut infeasible = false;
 
-    for (idx, (k, c)) in &vars.poses {
-        let ratio = cfg.ratios[*idx];
-        let w = compute_wheel(k, c, vars.lkw);
-        wheel_xs.push(w.x);
-        wheel_ys.push(w.y);
-        hip_thetas.push((k.y - h.y).atan2(k.x - h.x));
+    let mut ratios_sorted: Vec<_> = cfg.ratios.iter().copied().enumerate().collect();
+    ratios_sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-        let pose_crossing = segments_intersect_strict(&h, k, &bc, c, 1e-9);
+    for (idx, ratio) in ratios_sorted {
+        let theta = *vars.poses.get(&idx).unwrap_or(&0.0);
+        let target_y = height_for_ratio(cfg, ratio);
+        if let Some((k, c, w, _f)) = eval_pose_for_theta(
+            theta,
+            &bc,
+            vars.lu,
+            vars.lkc,
+            vars.lc,
+            vars.lkw,
+            target_y,
+            preferred_c.as_ref(),
+        ) {
+            wheel_xs.push(w.x);
+            wheel_ys.push(w.y);
+            hip_thetas.push(theta);
 
-        poses.push(Pose {
-            ratio,
-            target_wheel_y: height_for_ratio(cfg, ratio),
-            points: PosePoints {
-                h,
-                k: *k,
-                c: *c,
-                w,
-                bc,
-            },
-            crossing: pose_crossing,
-        });
+            let pose_crossing = segments_intersect_strict(&h, &k, &bc, &c, 1e-9);
+
+            poses.push(Pose {
+                ratio,
+                target_wheel_y: target_y,
+                points: PosePoints { h, k, c, w, bc },
+                crossing: pose_crossing,
+            });
+            preferred_c = Some(c);
+        } else {
+            infeasible = true;
+            let k = Vector2::new(vars.lu * theta.cos(), vars.lu * theta.sin());
+            let c = bc;
+            let w = compute_wheel(&k, &c, vars.lkw);
+            wheel_xs.push(w.x);
+            wheel_ys.push(w.y);
+            hip_thetas.push(theta);
+
+            poses.push(Pose {
+                ratio,
+                target_wheel_y: target_y,
+                points: PosePoints { h, k, c, w, bc },
+                crossing: false,
+            });
+        }
     }
-    poses.sort_by(|a, b| a.ratio.partial_cmp(&b.ratio).unwrap());
+
+    let poses_for_crossing: Vec<_> = poses
+        .iter()
+        .map(|pose| (pose.ratio, pose.points.k, pose.points.c))
+        .collect();
+    let crossing = has_crossing(&poses_for_crossing, &bc);
 
     // Quality metrics
     let n_wheels = wheel_xs.len().max(1);
@@ -313,7 +354,7 @@ fn build_solution(x: &[f64], cost: f64, success: bool, cfg: &Config) -> Solution
     let jump_report = compute_jump_report(&wheel_ys, &hip_thetas, cfg);
 
     Solution {
-        success: success && !crossing,
+        success: success && !crossing && !infeasible,
         cost,
         h_crouch: cfg.h_crouch,
         h_ext: cfg.h_ext,
@@ -327,7 +368,9 @@ fn build_solution(x: &[f64], cost: f64, success: bool, cfg: &Config) -> Solution
         jump_report,
         poses,
         quality,
-        message: if crossing {
+        message: if infeasible {
+            Some("Infeasible pose geometry".to_string())
+        } else if crossing {
             Some("Crossing detected".to_string())
         } else {
             None
@@ -370,73 +413,6 @@ fn compute_jump_report(wheel_ys: &[f64], hip_thetas: &[f64], cfg: &Config) -> Ju
         j_end,
         theta_span,
         y_dot_takeoff_est,
-    }
-}
-
-fn circle_intersections(
-    c0: &Vector2<f64>,
-    r0: f64,
-    c1: &Vector2<f64>,
-    r1: f64,
-) -> Option<(Vector2<f64>, Vector2<f64>)> {
-    let d = dist(c0, c1);
-    if d <= 1e-12 {
-        return None;
-    }
-
-    if d > r0 + r1 + 1e-12 || d < (r0 - r1).abs() - 1e-12 {
-        return None;
-    }
-
-    let a = (r0 * r0 - r1 * r1 + d * d) / (2.0 * d);
-    let mut h_sq = r0 * r0 - a * a;
-    if h_sq < 0.0 {
-        if h_sq > -1e-12 {
-            h_sq = 0.0;
-        } else {
-            return None;
-        }
-    }
-    let h = h_sq.sqrt();
-
-    let p2 = c0 + a * (c1 - c0) / d;
-    let rx = -(c1.y - c0.y) * (h / d);
-    let ry = (c1.x - c0.x) * (h / d);
-
-    let p3 = Vector2::new(p2.x + rx, p2.y + ry);
-    let p4 = Vector2::new(p2.x - rx, p2.y - ry);
-
-    Some((p3, p4))
-}
-
-fn eval_pose_for_theta(
-    theta: f64,
-    bc: &Vector2<f64>,
-    lu: f64,
-    lkc: f64,
-    lc: f64,
-    lkw: f64,
-    target_y: f64,
-    preferred_c: Option<&Vector2<f64>>,
-) -> Option<(Vector2<f64>, Vector2<f64>, Vector2<f64>, f64)> {
-    let k = Vector2::new(lu * theta.cos(), lu * theta.sin());
-    let (c1, c2) = circle_intersections(&k, lkc, bc, lc)?;
-
-    let w1 = compute_wheel(&k, &c1, lkw);
-    let f1 = w1.y - target_y;
-    let w2 = compute_wheel(&k, &c2, lkw);
-    let f2 = w2.y - target_y;
-
-    let use_first = if let Some(pref) = preferred_c {
-        (c1 - pref).norm() <= (c2 - pref).norm()
-    } else {
-        f1.abs() <= f2.abs()
-    };
-
-    if use_first {
-        Some((k, c1, w1, f1))
-    } else {
-        Some((k, c2, w2, f2))
     }
 }
 

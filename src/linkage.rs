@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::geometry::segments_intersect_strict;
+use crate::geometry::{dist, segments_intersect_strict};
 use crate::types::Point2D;
 use nalgebra::Vector2;
 
@@ -43,6 +43,73 @@ pub fn bc_from_params(xbc: f64, ybc: f64, cfg: &Config) -> Point2D {
 #[inline]
 pub fn height_for_ratio(cfg: &Config, ratio: f64) -> f64 {
     cfg.h_crouch + ratio * (cfg.h_ext - cfg.h_crouch)
+}
+
+fn circle_intersections(
+    c0: &Point2D,
+    r0: f64,
+    c1: &Point2D,
+    r1: f64,
+) -> Option<(Point2D, Point2D)> {
+    let d = dist(c0, c1);
+    if d <= 1e-12 {
+        return None;
+    }
+
+    if d > r0 + r1 + 1e-12 || d < (r0 - r1).abs() - 1e-12 {
+        return None;
+    }
+
+    let a = (r0 * r0 - r1 * r1 + d * d) / (2.0 * d);
+    let mut h_sq = r0 * r0 - a * a;
+    if h_sq < 0.0 {
+        if h_sq > -1e-12 {
+            h_sq = 0.0;
+        } else {
+            return None;
+        }
+    }
+    let h = h_sq.sqrt();
+
+    let p2 = c0 + a * (c1 - c0) / d;
+    let rx = -(c1.y - c0.y) * (h / d);
+    let ry = (c1.x - c0.x) * (h / d);
+
+    let p3 = Vector2::new(p2.x + rx, p2.y + ry);
+    let p4 = Vector2::new(p2.x - rx, p2.y - ry);
+
+    Some((p3, p4))
+}
+
+pub fn eval_pose_for_theta(
+    theta: f64,
+    bc: &Point2D,
+    lu: f64,
+    lkc: f64,
+    lc: f64,
+    lkw: f64,
+    target_y: f64,
+    preferred_c: Option<&Point2D>,
+) -> Option<(Point2D, Point2D, Point2D, f64)> {
+    let k = Vector2::new(lu * theta.cos(), lu * theta.sin());
+    let (c1, c2) = circle_intersections(&k, lkc, bc, lc)?;
+
+    let w1 = compute_wheel(&k, &c1, lkw);
+    let f1 = w1.y - target_y;
+    let w2 = compute_wheel(&k, &c2, lkw);
+    let f2 = w2.y - target_y;
+
+    let use_first = if let Some(pref) = preferred_c {
+        (c1 - pref).norm() <= (c2 - pref).norm()
+    } else {
+        f1.abs() <= f2.abs()
+    };
+
+    if use_first {
+        Some((k, c1, w1, f1))
+    } else {
+        Some((k, c2, w2, f2))
+    }
 }
 
 /// Check if any pose has H-K / Bc-C crossing

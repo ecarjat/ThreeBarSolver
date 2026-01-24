@@ -59,7 +59,9 @@ impl eframe::App for ThreeBarApp {
 
                 // Right: Results
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    app::results::render_results(ui, &mut self.state);
+                    ui.vertical(|ui| {
+                        app::results::render_results(ui, &mut self.state);
+                    });
                 });
             });
         });
