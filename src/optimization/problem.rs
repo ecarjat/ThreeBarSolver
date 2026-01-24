@@ -1,15 +1,17 @@
 use crate::config::Config;
 use crate::optimization::residuals::cost;
 use argmin::core::{CostFunction, Error};
+use std::sync::Arc;
 
 /// Argmin-compatible problem for full linkage optimization
+/// Uses Arc<Config> for cheap cloning during parallel optimization
 #[derive(Clone)]
 pub struct ThreeBarProblem {
-    pub cfg: Config,
+    pub cfg: Arc<Config>,
 }
 
 impl ThreeBarProblem {
-    pub fn new(cfg: Config) -> Self {
+    pub fn new(cfg: Arc<Config>) -> Self {
         Self { cfg }
     }
 }

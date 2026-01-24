@@ -15,6 +15,10 @@ use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::f64::consts::PI;
+use std::sync::Arc;
+
+const GLOBAL_INFEASIBLE_COST: f64 = 1.0e12;
+const GLOBAL_POSE_TOL: f64 = 1.0e-4;
 
 /// Generate initial seed for multi-start optimization
 pub fn generate_initial_seed(cfg: &Config, seed_idx: usize) -> Vec<f64> {
@@ -53,6 +57,51 @@ pub fn generate_initial_seed(cfg: &Config, seed_idx: usize) -> Vec<f64> {
     pack_vars(&poses, lu, lkw, lkc, lc, xbc, ybc, cfg)
 }
 
+fn is_feasible_global(x: &[f64], cfg: &Config, pose_tol: f64) -> bool {
+    let vars = unpack_vars(x, cfg);
+    let bc = bc_from_params(vars.xbc, vars.ybc, cfg);
+
+    let mut preferred_c: Option<Vector2<f64>> = None;
+    let mut poses_for_crossing = Vec::new();
+
+    let mut ratios_sorted: Vec<_> = cfg.ratios.iter().copied().enumerate().collect();
+    ratios_sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+    for (idx, ratio) in ratios_sorted {
+        let theta = *vars.poses.get(&idx).unwrap_or(&0.0);
+        let target_y = height_for_ratio(cfg, ratio);
+        let (k, c, _w, f) = match eval_pose_for_theta(
+            theta,
+            &bc,
+            vars.lu,
+            vars.lkc,
+            vars.lc,
+            vars.lkw,
+            target_y,
+            preferred_c.as_ref(),
+        ) {
+            Some(result) => result,
+            None => return false,
+        };
+
+        if !f.is_finite() || f.abs() > pose_tol {
+            return false;
+        }
+
+        poses_for_crossing.push((ratio, k, c));
+        preferred_c = Some(c);
+    }
+
+    !has_crossing(&poses_for_crossing, &bc)
+}
+
+fn global_cost(x: &[f64], cfg: &Config, pose_tol: f64) -> f64 {
+    if !is_feasible_global(x, cfg, pose_tol) {
+        return GLOBAL_INFEASIBLE_COST;
+    }
+    cost(x, cfg)
+}
+
 /// Local optimization using Nelder-Mead
 pub fn solve_local(cfg: &Config, x0: Vec<f64>) -> (Vec<f64>, f64, bool) {
     let bounds = build_bounds(cfg);
@@ -61,7 +110,7 @@ pub fn solve_local(cfg: &Config, x0: Vec<f64>) -> (Vec<f64>, f64, bool) {
     let mut x0_clamped = x0;
     bounds.clamp(&mut x0_clamped);
 
-    let problem = ThreeBarProblem::new(cfg.clone());
+    let problem = ThreeBarProblem::new(Arc::new(cfg.clone()));
 
     // Build simplex for Nelder-Mead
     let n = x0_clamped.len();
@@ -147,20 +196,37 @@ pub fn solve_multistart(cfg: &Config) -> (Vec<f64>, f64) {
         })
         .collect();
 
+    // Handle empty results (shouldn't happen if n_starts >= 1, but be safe)
+    if results.is_empty() {
+        let fallback = generate_initial_seed(cfg, 0);
+        let fallback_cost = cost(&fallback, cfg);
+        return (fallback, fallback_cost);
+    }
+
+    // Compare costs safely, treating NaN as worse than any finite value
+    let compare_costs = |a: &f64, b: &f64| -> std::cmp::Ordering {
+        match (a.is_nan(), b.is_nan()) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater, // NaN is "worse"
+            (false, true) => std::cmp::Ordering::Less,    // finite is "better"
+            (false, false) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
+        }
+    };
+
     // Find best non-crossing solution
     let best_non_crossing = results
         .iter()
         .filter(|(_, _, crossing)| !crossing)
-        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        .min_by(|a, b| compare_costs(&a.1, &b.1));
 
     match best_non_crossing {
         Some((x, cost, _)) => (x.clone(), *cost),
         None => {
-            // Fall back to best overall
+            // Fall back to best overall (results is guaranteed non-empty here)
             let best = results
                 .iter()
-                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
-                .unwrap();
+                .min_by(|a, b| compare_costs(&a.1, &b.1))
+                .expect("results should be non-empty");
             (best.0.clone(), best.1)
         }
     }
@@ -174,18 +240,40 @@ fn solve_global_de(cfg: &Config) -> (Vec<f64>, f64) {
     let seed = cfg.global_seed.unwrap_or(1234);
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
+    let pose_tol = GLOBAL_POSE_TOL;
+
     let mut pop: Vec<Vec<f64>> = Vec::with_capacity(pop_size);
-    for _ in 0..pop_size {
+    let mut seed_idx = 0;
+    let mut seed_attempts = 0;
+    let max_seed_attempts = pop_size.saturating_mul(20).max(20);
+    while pop.len() < pop_size && seed_attempts < max_seed_attempts {
+        let mut x = generate_initial_seed(cfg, seed_idx);
+        seed_idx += 1;
+        seed_attempts += 1;
+        bounds.clamp(&mut x);
+        if is_feasible_global(&x, cfg, pose_tol) {
+            pop.push(x);
+        }
+    }
+
+    while pop.len() < pop_size {
+        let mut tries = 0;
         let mut x = vec![0.0; n];
-        for i in 0..n {
-            let lo = bounds.lower[i];
-            let hi = bounds.upper[i];
-            x[i] = lo + rng.gen::<f64>() * (hi - lo);
+        loop {
+            for i in 0..n {
+                let lo = bounds.lower[i];
+                let hi = bounds.upper[i];
+                x[i] = lo + rng.gen::<f64>() * (hi - lo);
+            }
+            tries += 1;
+            if is_feasible_global(&x, cfg, pose_tol) || tries >= 8 {
+                break;
+            }
         }
         pop.push(x);
     }
 
-    let mut costs: Vec<f64> = pop.iter().map(|x| cost(x, cfg)).collect();
+    let mut costs: Vec<f64> = pop.iter().map(|x| global_cost(x, cfg, pose_tol)).collect();
     let mut best_idx = costs
         .iter()
         .enumerate()
@@ -215,7 +303,7 @@ fn solve_global_de(cfg: &Config) -> (Vec<f64>, f64) {
             }
 
             bounds.clamp(&mut trial);
-            let trial_cost = cost(&trial, cfg);
+            let trial_cost = global_cost(&trial, cfg, pose_tol);
             if trial_cost < costs[i] {
                 pop[i] = trial;
                 costs[i] = trial_cost;
@@ -256,7 +344,12 @@ fn pick_three_distinct(
 /// Main solve function
 pub fn solve(cfg: &Config) -> Solution {
     let (x_stage1, _) = if cfg.use_global_opt {
-        solve_global_de(cfg)
+        let (x, c) = solve_global_de(cfg);
+        if c >= GLOBAL_INFEASIBLE_COST || !is_feasible_global(&x, cfg, GLOBAL_POSE_TOL) {
+            solve_multistart(cfg)
+        } else {
+            (x, c)
+        }
     } else {
         solve_multistart(cfg)
     };
