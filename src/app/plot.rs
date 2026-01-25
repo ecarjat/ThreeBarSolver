@@ -392,7 +392,6 @@ fn interpolate_pose_for_ratio(
             cost: f64::INFINITY,
             points: crate::types::PosePoints { h, k: h, c: h, w: h, bc },
             crossing: false,
-            seed: Vec::new(),
         };
     }
 
@@ -443,7 +442,6 @@ fn interpolate_pose_for_ratio(
             cost: f * f,
             points: crate::types::PosePoints { h, k, c, w, bc },
             crossing,
-            seed: vec![k.x, k.y, c.x, c.y],
         }
     } else {
         PoseSolveResult {
@@ -457,7 +455,6 @@ fn interpolate_pose_for_ratio(
                 bc,
             },
             crossing: p0.crossing,
-            seed: Vec::new(),
         }
     }
 }

@@ -34,22 +34,11 @@ fn compute_knee_angle(h: &Point2D, k: &Point2D, w: &Point2D) -> Option<f64> {
     }
 }
 
-/// Compute residual vector for the full optimization problem
-/// Returns weighted constraint violations as a vector
-pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
+#[inline]
+fn for_each_residual<F: FnMut(f64) -> bool>(x: &[f64], cfg: &Config, mut emit: F) {
     let vars = unpack_vars(x, cfg);
     let h = Vector2::new(0.0, 0.0);
     let bc = bc_from_params(vars.xbc, vars.ybc, cfg);
-
-    // Calculate exact capacity to avoid reallocations:
-    // - Fixed constraints: up to 13 (link ratios, pin constraints, regularization, bias, mean_wx)
-    // - Per-pose: up to 8 each (pose target, knee, 3 below-ground, crossing, angle, alpha)
-    // - Wheel X alignment: n_poses
-    // - Jumping (n>=2): 1 + 5*(n-1) = 5n - 4
-    // Total max: 13 + 8n + n + 5n - 4 = 9 + 14n
-    let n_poses = cfg.ratios.len();
-    let capacity = 9 + 14 * n_poses;
-    let mut r: Vec<f64> = Vec::with_capacity(capacity);
 
     // --- Link ratio constraints ---
     // CW/HK ratio
@@ -59,10 +48,14 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
         let ratio = cw_len / hk_len;
 
         if let Some(min) = cfg.cw_hk_ratio_min {
-            r.push((min - ratio).max(0.0) * cfg.w_cw_hk_ratio);
+            if !emit((min - ratio).max(0.0) * cfg.w_cw_hk_ratio) {
+                return;
+            }
         }
         if let Some(max) = cfg.cw_hk_ratio_max {
-            r.push((ratio - max).max(0.0) * cfg.w_cw_hk_ratio);
+            if !emit((ratio - max).max(0.0) * cfg.w_cw_hk_ratio) {
+                return;
+            }
         }
     }
 
@@ -72,33 +65,51 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
         let ratio = vars.lc / hk_len;
 
         if let Some(min) = cfg.lc_hk_ratio_min {
-            r.push((min - ratio).max(0.0) * cfg.w_lc_hk_ratio);
+            if !emit((min - ratio).max(0.0) * cfg.w_lc_hk_ratio) {
+                return;
+            }
         }
         if let Some(max) = cfg.lc_hk_ratio_max {
-            r.push((ratio - max).max(0.0) * cfg.w_lc_hk_ratio);
+            if !emit((ratio - max).max(0.0) * cfg.w_lc_hk_ratio) {
+                return;
+            }
         }
     }
 
     // XBC minimum constraint
     if let Some(xbc_min) = cfg.xbc_min {
-        r.push((xbc_min - bc.x).max(0.0) * cfg.w_xbc_min);
+        if !emit((xbc_min - bc.x).max(0.0) * cfg.w_xbc_min) {
+            return;
+        }
     }
 
     // BC radius constraint
     if let Some(bc_radius_max) = cfg.bc_radius_max {
         let bc_r = (bc - h).norm();
-        r.push((bc_r - bc_radius_max).max(0.0) * cfg.w_bc_radius);
+        if !emit((bc_r - bc_radius_max).max(0.0) * cfg.w_bc_radius) {
+            return;
+        }
     }
 
     // --- Per-pose constraints ---
-    let mut wheels = Vec::new();
-    let mut wheel_ys = Vec::new();
-    let mut hip_thetas = Vec::new();
+    let mut wheels = Vec::with_capacity(cfg.ratios.len());
+    let mut wheel_ys = Vec::with_capacity(cfg.ratios.len());
+    let mut hip_thetas = Vec::with_capacity(cfg.ratios.len());
     let mut preferred_c: Option<Vector2<f64>> = None;
     let mut infeasible = false;
 
     for &(idx, ratio) in &cfg.ratios_sorted {
-        let theta = *vars.poses.get(&idx).unwrap();
+        let theta = match vars.poses.get(&idx) {
+            Some(&t) => t,
+            None => {
+                // Missing pose index - treat as infeasible
+                infeasible = true;
+                if !emit(INFEASIBLE_PENALTY) {
+                    return;
+                }
+                continue;
+            }
+        };
         let target_y = height_for_ratio(cfg, ratio);
         let (k, c, w, f) = match eval_pose_for_theta(
             theta,
@@ -113,7 +124,9 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
             Some(result) => result,
             None => {
                 infeasible = true;
-                r.push(INFEASIBLE_PENALTY);
+                if !emit(INFEASIBLE_PENALTY) {
+                    return;
+                }
                 continue;
             }
         };
@@ -124,28 +137,42 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
         hip_thetas.push(theta);
 
         // Pose target
-        r.push(f * cfg.w_pose);
+        if !emit(f * cfg.w_pose) {
+            return;
+        }
 
         // Knee above wheel
         let knee_violation = (k.y - w.y + cfg.knee_above_margin).max(0.0);
-        r.push(knee_violation * cfg.w_knee_above_wheel);
+        if !emit(knee_violation * cfg.w_knee_above_wheel) {
+            return;
+        }
 
         // Below ground penalties
-        r.push((-k.y).max(0.0) * cfg.w_below);
-        r.push((-c.y).max(0.0) * cfg.w_below);
-        r.push((-w.y).max(0.0) * cfg.w_below);
+        if !emit((-k.y).max(0.0) * cfg.w_below) {
+            return;
+        }
+        if !emit((-c.y).max(0.0) * cfg.w_below) {
+            return;
+        }
+        if !emit((-w.y).max(0.0) * cfg.w_below) {
+            return;
+        }
 
         // Crossing prevention
         let d_cross = seg_seg_distance(&h, &k, &bc, &c);
         let cross_violation = (cfg.cross_min - d_cross).max(0.0);
         let cross_scale = cross_violation / cfg.cross_min.max(1e-9);
-        r.push(cross_scale * cfg.w_no_cross);
+        if !emit(cross_scale * cfg.w_no_cross) {
+            return;
+        }
 
         // Knee angle constraint (angle H-K-W)
         let alpha = compute_knee_angle(&h, &k, &w);
         if let Some(angle_hkw) = alpha {
             let angle_violation = (angle_hkw - cfg.max_angle_hkw).max(0.0);
-            r.push(angle_violation * cfg.w_angle_hkw);
+            if !emit(angle_violation * cfg.w_angle_hkw) {
+                return;
+            }
         }
 
         // Pose=1 theta target (alpha input)
@@ -180,22 +207,28 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
                     alpha_error
                 };
 
-                r.push(theta_error * cfg.w_theta_pose1);
+                if !emit(theta_error * cfg.w_theta_pose1) {
+                    return;
+                }
             }
         }
     }
 
     if infeasible {
-        return r;
+        return;
     }
 
     // Wheel X alignment
     let n_wheels = wheels.len().max(1);
     let mean_wx: f64 = wheels.iter().map(|w| w.x).sum::<f64>() / n_wheels as f64;
     for w in &wheels {
-        r.push((w.x - mean_wx) * cfg.w_wheel_x);
+        if !emit((w.x - mean_wx) * cfg.w_wheel_x) {
+            return;
+        }
     }
-    r.push(mean_wx * cfg.w_wheel_x_mean);
+    if !emit(mean_wx * cfg.w_wheel_x_mean) {
+        return;
+    }
 
     // --- Jumping transmission shaping ---
     if cfg.ratios_sorted.len() >= 2 {
@@ -203,7 +236,9 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
         let expected_sign = if dtheta_total >= 0.0 { 1.0 } else { -1.0 };
         let theta_span = dtheta_total.abs();
 
-        r.push((cfg.theta_span_min - theta_span).max(0.0) * cfg.w_theta_span);
+        if !emit((cfg.theta_span_min - theta_span).max(0.0) * cfg.w_theta_span) {
+            return;
+        }
 
         for i in 0..(cfg.ratios_sorted.len() - 1) {
             let (_, r0) = cfg.ratios_sorted[i];
@@ -212,7 +247,9 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
             let dtheta = wrap_pi(hip_thetas[i + 1] - hip_thetas[i]);
 
             // Near-singular penalty
-            r.push((DTHETA_MIN_ABS - dtheta.abs()).max(0.0) * INFEASIBLE_PENALTY);
+            if !emit((DTHETA_MIN_ABS - dtheta.abs()).max(0.0) * INFEASIBLE_PENALTY) {
+                return;
+            }
 
             let dtheta_safe = if dtheta.abs() < DTHETA_MIN_ABS {
                 if dtheta >= 0.0 { DTHETA_MIN_ABS } else { -DTHETA_MIN_ABS }
@@ -221,9 +258,11 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
             };
 
             // Monotonic hip motion
-            r.push(
+            if !emit(
                 (cfg.theta_step_min - expected_sign * dtheta_safe).max(0.0) * cfg.w_theta_monotonic,
-            );
+            ) {
+                return;
+            }
 
             // Jacobian profile
             let j = dy / dtheta_safe;
@@ -231,30 +270,72 @@ pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
             let j_target = cfg.jac_start + t * (cfg.jac_end - cfg.jac_start);
             let j_abs = j.abs();
 
-            r.push((j_abs - j_target) * cfg.w_jac_profile);
-            r.push((cfg.jac_min - j_abs).max(0.0) * cfg.w_jac_bounds);
-            r.push((j_abs - cfg.jac_max).max(0.0) * cfg.w_jac_bounds);
+            if !emit((j_abs - j_target) * cfg.w_jac_profile) {
+                return;
+            }
+            if !emit((cfg.jac_min - j_abs).max(0.0) * cfg.w_jac_bounds) {
+                return;
+            }
+            if !emit((j_abs - cfg.jac_max).max(0.0) * cfg.w_jac_bounds) {
+                return;
+            }
         }
     }
 
     // Regularization
     for val in [vars.lu, vars.lkw, vars.lkc, vars.lc] {
         if val <= 0.0 {
-            r.push((val.abs() + 1.0) * INFEASIBLE_PENALTY);
-        } else {
-            r.push(val * cfg.w_reg);
+            if !emit((val.abs() + 1.0) * INFEASIBLE_PENALTY) {
+                return;
+            }
+        } else if !emit(val * cfg.w_reg) {
+            return;
         }
     }
 
     // Pin joint bias
-    r.push(bc.x * cfg.w_bc_x);
-    r.push(bc.y * cfg.w_bc_y);
+    if !emit(bc.x * cfg.w_bc_x) {
+        return;
+    }
+    let _ = emit(bc.y * cfg.w_bc_y);
+}
 
+/// Compute residual vector for the full optimization problem
+/// Returns weighted constraint violations as a vector
+#[allow(dead_code)]
+pub fn residuals(x: &[f64], cfg: &Config) -> Vec<f64> {
+    // Calculate exact capacity to avoid reallocations:
+    // - Fixed constraints: up to 13 (link ratios, pin constraints, regularization, bias, mean_wx)
+    // - Per-pose: up to 8 each (pose target, knee, 3 below-ground, crossing, angle, alpha)
+    // - Wheel X alignment: n_poses
+    // - Jumping (n>=2): 1 + 5*(n-1) = 5n - 4
+    // Total max: 13 + 8n + n + 5n - 4 = 9 + 14n
+    let n_poses = cfg.ratios.len();
+    let capacity = 9 + 14 * n_poses;
+    let mut r: Vec<f64> = Vec::with_capacity(capacity);
+    for_each_residual(x, cfg, |val| {
+        r.push(val);
+        true
+    });
     r
 }
 
 /// Compute cost (sum of squared residuals)
 pub fn cost(x: &[f64], cfg: &Config) -> f64 {
-    let r = residuals(x, cfg);
-    r.iter().map(|v| v * v).sum()
+    let mut sum = 0.0;
+    for_each_residual(x, cfg, |val| {
+        sum += val * val;
+        true
+    });
+    sum
+}
+
+/// Compute cost with an upper bound; stops early if cost exceeds max_cost.
+pub fn cost_bounded(x: &[f64], cfg: &Config, max_cost: f64) -> f64 {
+    let mut sum = 0.0;
+    for_each_residual(x, cfg, |val| {
+        sum += val * val;
+        sum <= max_cost
+    });
+    sum
 }

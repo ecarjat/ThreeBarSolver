@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::types::{Lengths, PinJointLocation};
 use std::collections::BTreeMap;
 
 /// Variable layout for N ratios:
@@ -9,12 +10,31 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct UnpackedVars {
     pub poses: BTreeMap<usize, f64>, // index -> theta (hip angle)
-    pub lu: f64,                                     // Upper leg length H-K
-    pub lkw: f64,                                    // Lower leg length K-W
-    pub lkc: f64,                                    // Inner joint offset K-C
-    pub lc: f64,                                     // Link length Bc-C
-    pub xbc: f64,                                    // Pin joint X
-    pub ybc: f64,                                    // Pin joint Y
+    pub lu: f64,                     // Upper leg length H-K
+    pub lkw: f64,                    // Lower leg length K-W
+    pub lkc: f64,                    // Inner joint offset K-C
+    pub lc: f64,                     // Link length Bc-C
+    pub xbc: f64,                    // Pin joint X
+    pub ybc: f64,                    // Pin joint Y
+}
+
+impl From<&UnpackedVars> for Lengths {
+    fn from(vars: &UnpackedVars) -> Self {
+        Self {
+            upper_leg_hk: vars.lu,
+            lower_leg_kw: vars.lkw,
+            link_bc_c: vars.lc,
+        }
+    }
+}
+
+impl From<&UnpackedVars> for PinJointLocation {
+    fn from(vars: &UnpackedVars) -> Self {
+        Self {
+            x: vars.xbc,
+            y: vars.ybc,
+        }
+    }
 }
 
 /// Get the number of optimization variables for a given config

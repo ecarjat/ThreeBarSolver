@@ -4,7 +4,7 @@ use crate::linkage::{bc_from_params, compute_wheel, eval_pose_for_theta, has_cro
 use crate::optimization::bounds::build_bounds;
 use crate::optimization::packing::{pack_vars, unpack_vars};
 use crate::optimization::problem::ThreeBarProblem;
-use crate::optimization::residuals::cost;
+use crate::optimization::residuals::{cost, cost_bounded};
 use crate::types::*;
 use argmin::core::{Executor, IterState};
 use argmin::solver::neldermead::NelderMead;
@@ -125,11 +125,11 @@ fn is_feasible_global(x: &[f64], cfg: &Config, pose_tol: f64) -> bool {
     !has_crossing(&poses_for_crossing, &bc)
 }
 
-fn global_cost(x: &[f64], cfg: &Config, pose_tol: f64) -> f64 {
+fn global_cost(x: &[f64], cfg: &Config, pose_tol: f64, max_cost: f64) -> f64 {
     if !is_feasible_global(x, cfg, pose_tol) {
         return GLOBAL_INFEASIBLE_COST;
     }
-    cost(x, cfg)
+    cost_bounded(x, cfg, max_cost)
 }
 
 /// Local optimization using Nelder-Mead
@@ -301,7 +301,10 @@ fn solve_global_de(cfg: &Config) -> (Vec<f64>, f64) {
         pop.push(x);
     }
 
-    let mut costs: Vec<f64> = pop.iter().map(|x| global_cost(x, cfg, pose_tol)).collect();
+    let mut costs: Vec<f64> = pop
+        .iter()
+        .map(|x| global_cost(x, cfg, pose_tol, f64::INFINITY))
+        .collect();
     let mut best_idx = costs
         .iter()
         .enumerate()
@@ -331,7 +334,8 @@ fn solve_global_de(cfg: &Config) -> (Vec<f64>, f64) {
             }
 
             bounds.clamp(&mut trial);
-            let trial_cost = global_cost(&trial, cfg, pose_tol);
+            let best_cost = costs[best_idx];
+            let trial_cost = global_cost(&trial, cfg, pose_tol, best_cost);
             if trial_cost < costs[i] {
                 pop[i] = trial;
                 costs[i] = trial_cost;
@@ -420,7 +424,10 @@ fn pick_three_distinct(
 }
 
 /// Main solve function
-pub fn solve(cfg: &Config) -> Solution {
+/// Returns an error if the config fails validation.
+pub fn solve(cfg: &Config) -> Result<Solution, String> {
+    cfg.validate()?;
+
     let (x_stage1, _) = if cfg.use_global_opt {
         let (x, c) = solve_global_de(cfg);
         if c >= GLOBAL_INFEASIBLE_COST || !is_feasible_global(&x, cfg, GLOBAL_POSE_TOL) {
@@ -434,7 +441,7 @@ pub fn solve(cfg: &Config) -> Solution {
     let (x_opt, cost, success) = solve_local(cfg, x_stage1);
 
     // Build solution from optimized variables
-    build_solution(&x_opt, cost, success, cfg)
+    Ok(build_solution(&x_opt, cost, success, cfg))
 }
 
 /// Build Solution struct from optimization result
@@ -526,11 +533,7 @@ fn build_solution(x: &[f64], cost: f64, success: bool, cfg: &Config) -> Solution
         cost,
         h_crouch: cfg.h_crouch,
         h_ext: cfg.h_ext,
-        lengths: Lengths {
-            upper_leg_hk: vars.lu,
-            lower_leg_kw: vars.lkw,
-            link_bc_c: vars.lc,
-        },
+        lengths: Lengths::from(&vars),
         pin_joint: PinJointLocation { x: bc.x, y: bc.y },
         inner_joint_offset_kc: vars.lkc,
         jump_report,
@@ -686,6 +689,5 @@ pub fn solve_pose_ratio(
         cost,
         points: PosePoints { h, k, c, w, bc },
         crossing,
-        seed: vec![k.x, k.y, c.x, c.y],
     }
 }

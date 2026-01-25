@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub type Point2D = Vector2<f64>;
 
 /// Linkage lengths
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Lengths {
     pub upper_leg_hk: f64, // Lu: Hip to Knee
     pub lower_leg_kw: f64, // Lkw: Knee to Wheel (along K-C direction)
@@ -13,14 +13,14 @@ pub struct Lengths {
 }
 
 /// Fixed pin joint location (already constrained if bc_radius_max is used)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PinJointLocation {
     pub x: f64,
     pub y: f64,
 }
 
 /// Points in a single pose
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PosePoints {
     pub h: Point2D,  // Hip (always origin)
     pub k: Point2D,  // Knee
@@ -61,7 +61,7 @@ pub struct Quality {
 }
 
 /// Complete solution output
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Solution {
     pub success: bool,
     pub cost: f64,
@@ -83,5 +83,4 @@ pub struct PoseSolveResult {
     pub cost: f64,
     pub points: PosePoints,
     pub crossing: bool,
-    pub seed: Vec<f64>, // For continuation
 }

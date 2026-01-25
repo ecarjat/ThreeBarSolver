@@ -470,9 +470,8 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                     // Run solver synchronously (for simplicity)
                     // In production, spawn a thread
                     state.is_solving = true;
-                    match state.config.validate() {
-                        Ok(()) => {
-                            let solution = solve(&state.config);
+                    match solve(&state.config) {
+                        Ok(solution) => {
                             state.solution = Some(solution);
                             state.current_pose_ratio = 0.0;
                             state.invalidate_pose_cache();
