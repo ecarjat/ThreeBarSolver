@@ -131,7 +131,7 @@ fn for_each_residual<F: FnMut(f64) -> bool>(x: &[f64], cfg: &Config, mut emit: F
             }
         };
 
-        preferred_c = Some(c.clone());
+        preferred_c = Some(c);
         wheels.push(w);
         wheel_ys.push(w.y);
         hip_thetas.push(theta);

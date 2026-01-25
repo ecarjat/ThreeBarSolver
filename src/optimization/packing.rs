@@ -2,11 +2,11 @@ use crate::config::Config;
 use crate::types::{Lengths, PinJointLocation};
 use std::collections::BTreeMap;
 
+/// Unpacked optimization variables.
+///
 /// Variable layout for N ratios:
-/// [theta0, theta1, ..., thetaN-1, Lu, Lkw, Lkc, Lc, xbc, ybc]
+/// `[theta0, theta1, ..., thetaN-1, Lu, Lkw, Lkc, Lc, xbc, ybc]`
 /// Total: N + 6 variables
-
-/// Unpacked optimization variables
 #[derive(Debug, Clone)]
 pub struct UnpackedVars {
     pub poses: BTreeMap<usize, f64>, // index -> theta (hip angle)

@@ -51,6 +51,9 @@ const POSE_SUCCESS_TOL: f64 = 1e-4;
 // Geometric tolerances
 const GEOMETRIC_EPS: f64 = 1e-9;
 
+/// Pose evaluation result: (knee, inner_joint, wheel, objective_value)
+type PoseEvalResult = (Vector2<f64>, Vector2<f64>, Vector2<f64>, f64);
+
 /// Generate initial seed for multi-start optimization
 pub fn generate_initial_seed(cfg: &Config, seed_idx: usize) -> Vec<f64> {
     let mut rng = ChaCha8Rng::seed_from_u64(
@@ -616,7 +619,7 @@ pub fn solve_pose_ratio(
     });
     let mut preferred_c = seed_kc.map(|(_, c)| c);
 
-    let mut best: Option<(Vector2<f64>, Vector2<f64>, Vector2<f64>, f64)> = None;
+    let mut best: Option<PoseEvalResult> = None;
     let mut prev: Option<(f64, Vector2<f64>, f64)> = None;
     let mut best_bracket: Option<(f64, f64, Vector2<f64>)> = None;
 
@@ -636,11 +639,11 @@ pub fn solve_pose_ratio(
 
             if let Some((prev_theta, prev_c, prev_f)) = prev.as_ref() {
                 if prev_f.signum() != f.signum() {
-                    best_bracket = Some((*prev_theta, theta, prev_c.clone()));
+                    best_bracket = Some((*prev_theta, theta, *prev_c));
                 }
             }
 
-            prev = Some((theta, c.clone(), f));
+            prev = Some((theta, c, f));
             preferred_c = Some(c);
         }
     }
