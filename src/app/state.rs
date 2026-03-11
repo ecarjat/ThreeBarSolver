@@ -28,6 +28,12 @@ pub struct AppState {
     pub jac_end_mm: f64,
     pub jac_min_mm: f64,
     pub jac_max_mm: f64,
+    pub custom_upper_leg_hk_mm: f64,
+    pub custom_lower_leg_kw_mm: f64,
+    pub custom_inner_joint_kc_mm: f64,
+    pub custom_link_bc_c_mm: f64,
+    pub custom_pin_x_mm: f64,
+    pub custom_pin_y_mm: f64, // Displayed with +Y up, converted to internal +Y down
 
     // Ratio selection
     pub ratio_0: bool,
@@ -64,6 +70,12 @@ impl AppState {
             jac_end_mm: cfg.jac_end * 1000.0,
             jac_min_mm: cfg.jac_min * 1000.0,
             jac_max_mm: cfg.jac_max * 1000.0,
+            custom_upper_leg_hk_mm: 250.0,
+            custom_lower_leg_kw_mm: 250.0,
+            custom_inner_joint_kc_mm: cfg.kc_min.max(0.01) * 1000.0,
+            custom_link_bc_c_mm: 250.0,
+            custom_pin_x_mm: cfg.xbc_min.unwrap_or(0.0) * 1000.0,
+            custom_pin_y_mm: 50.0,
             ratio_0,
             ratio_25,
             ratio_50,
@@ -161,5 +173,19 @@ impl AppState {
         self.cached_pose_ratio = None;
         self.cached_pose = None;
         self.plot_bounds = None;
+    }
+
+    /// Populate custom geometry fields from the currently displayed solution.
+    pub fn load_custom_geometry_from_solution(&mut self) {
+        let Some(solution) = self.solution.as_ref() else {
+            return;
+        };
+
+        self.custom_upper_leg_hk_mm = solution.lengths.upper_leg_hk * 1000.0;
+        self.custom_lower_leg_kw_mm = solution.lengths.lower_leg_kw * 1000.0;
+        self.custom_inner_joint_kc_mm = solution.inner_joint_offset_kc * 1000.0;
+        self.custom_link_bc_c_mm = solution.lengths.link_bc_c * 1000.0;
+        self.custom_pin_x_mm = solution.pin_joint.x * 1000.0;
+        self.custom_pin_y_mm = -solution.pin_joint.y * 1000.0;
     }
 }

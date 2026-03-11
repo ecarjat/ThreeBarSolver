@@ -4,7 +4,7 @@ use egui::Ui;
 /// Render the results panel
 pub fn render_results(ui: &mut Ui, state: &mut AppState) {
     if state.solution.is_none() {
-        ui.label("Click 'Solve 3-bar design' to compute.");
+        ui.label("Click 'Solve' or 'Evaluate custom' to compute.");
         return;
     }
 

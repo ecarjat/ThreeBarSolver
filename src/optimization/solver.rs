@@ -447,6 +447,144 @@ pub fn solve(cfg: &Config) -> Result<Solution, String> {
     Ok(build_solution(&x_opt, cost, success, cfg))
 }
 
+/// Evaluate user-provided linkage geometry without running optimization.
+pub fn evaluate_custom_geometry(
+    cfg: &Config,
+    lengths: Lengths,
+    pin_joint: PinJointLocation,
+    inner_joint_offset_kc: f64,
+) -> Result<Solution, String> {
+    cfg.validate()?;
+    validate_custom_geometry_inputs(cfg, &lengths, &pin_joint, inner_joint_offset_kc)?;
+
+    let mut poses = Vec::with_capacity(cfg.ratios_sorted.len());
+    let mut wheel_xs = Vec::with_capacity(cfg.ratios_sorted.len());
+    let mut wheel_ys = Vec::with_capacity(cfg.ratios_sorted.len());
+    let mut hip_thetas = Vec::with_capacity(cfg.ratios_sorted.len());
+    let mut total_cost = 0.0;
+    let mut kinematic_fail_count = 0usize;
+    let mut pose_seed: Option<[f64; 4]> = None;
+
+    for &(_, ratio) in &cfg.ratios_sorted {
+        let seed_slice = pose_seed.as_ref().map(|seed| &seed[..]);
+        let pose_result = solve_pose_ratio(
+            cfg,
+            &lengths,
+            &pin_joint,
+            inner_joint_offset_kc,
+            ratio,
+            seed_slice,
+        );
+        let target_y = height_for_ratio(cfg, ratio);
+        let points = pose_result.points;
+
+        wheel_xs.push(points.w.x);
+        wheel_ys.push(points.w.y);
+        hip_thetas.push(points.k.y.atan2(points.k.x));
+        total_cost += pose_result.cost;
+        if !pose_result.success && !pose_result.crossing {
+            kinematic_fail_count += 1;
+        }
+
+        if points.k.x.is_finite()
+            && points.k.y.is_finite()
+            && points.c.x.is_finite()
+            && points.c.y.is_finite()
+        {
+            pose_seed = Some([points.k.x, points.k.y, points.c.x, points.c.y]);
+        }
+
+        poses.push(Pose {
+            ratio,
+            target_wheel_y: target_y,
+            points,
+            crossing: pose_result.crossing,
+        });
+    }
+
+    let bc = Vector2::new(pin_joint.x, pin_joint.y);
+    let poses_for_crossing: Vec<_> = poses
+        .iter()
+        .map(|pose| (pose.ratio, pose.points.k, pose.points.c))
+        .collect();
+    let crossing = has_crossing(&poses_for_crossing, &bc);
+    let quality = compute_quality(&wheel_xs, &wheel_ys, crossing);
+    let jump_report = compute_jump_report(&wheel_ys, &hip_thetas, cfg);
+
+    let mut issues = Vec::new();
+    if kinematic_fail_count > 0 {
+        issues.push(format!(
+            "Pose kinematics failed for {} ratio(s)",
+            kinematic_fail_count
+        ));
+    }
+    if crossing {
+        issues.push("Crossing detected".to_string());
+    }
+
+    Ok(Solution {
+        success: kinematic_fail_count == 0 && !crossing,
+        cost: total_cost,
+        h_crouch: cfg.h_crouch,
+        h_ext: cfg.h_ext,
+        lengths,
+        pin_joint,
+        inner_joint_offset_kc,
+        jump_report,
+        poses,
+        quality,
+        message: if issues.is_empty() {
+            None
+        } else {
+            Some(issues.join("; "))
+        },
+    })
+}
+
+fn validate_custom_geometry_inputs(
+    cfg: &Config,
+    lengths: &Lengths,
+    pin_joint: &PinJointLocation,
+    inner_joint_offset_kc: f64,
+) -> Result<(), String> {
+    for (name, value) in [
+        ("upper_leg_hk", lengths.upper_leg_hk),
+        ("lower_leg_kw", lengths.lower_leg_kw),
+        ("link_bc_c", lengths.link_bc_c),
+        ("inner_joint_offset_kc", inner_joint_offset_kc),
+    ] {
+        if !value.is_finite() {
+            return Err(format!("{name} must be finite"));
+        }
+        if value <= 0.0 {
+            return Err(format!("{name} must be > 0"));
+        }
+    }
+
+    if !pin_joint.x.is_finite() || !pin_joint.y.is_finite() {
+        return Err("Pin joint coordinates must be finite".to_string());
+    }
+
+    if inner_joint_offset_kc < cfg.kc_min {
+        return Err(format!(
+            "inner_joint_offset_kc ({:.3} mm) is below kc_min ({:.3} mm)",
+            inner_joint_offset_kc * 1000.0,
+            cfg.kc_min * 1000.0
+        ));
+    }
+    if let Some(kc_max) = cfg.kc_max {
+        if inner_joint_offset_kc > kc_max {
+            return Err(format!(
+                "inner_joint_offset_kc ({:.3} mm) exceeds kc_max ({:.3} mm)",
+                inner_joint_offset_kc * 1000.0,
+                kc_max * 1000.0
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Build Solution struct from optimization result
 fn build_solution(x: &[f64], cost: f64, success: bool, cfg: &Config) -> Solution {
     let vars = unpack_vars(x, cfg);
@@ -512,21 +650,7 @@ fn build_solution(x: &[f64], cost: f64, success: bool, cfg: &Config) -> Solution
     let crossing = has_crossing(&poses_for_crossing, &bc);
 
     // Quality metrics
-    let n_wheels = wheel_xs.len().max(1);
-    let mean_wx = wheel_xs.iter().sum::<f64>() / n_wheels as f64;
-    let rms_wx =
-        (wheel_xs.iter().map(|x| (x - mean_wx).powi(2)).sum::<f64>() / n_wheels as f64).sqrt();
-
-    let quality = Quality {
-        max_wheel_x: wheel_xs.iter().map(|x| x.abs()).fold(0.0, f64::max),
-        wheel_x_pp: wheel_xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
-            - wheel_xs.iter().cloned().fold(f64::INFINITY, f64::min),
-        wheel_x_rms: rms_wx,
-        wheel_y_span: wheel_ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
-            - wheel_ys.iter().cloned().fold(f64::INFINITY, f64::min),
-        mean_wheel_x: mean_wx,
-        crossing,
-    };
+    let quality = compute_quality(&wheel_xs, &wheel_ys, crossing);
 
     // Jump report
     let jump_report = compute_jump_report(&wheel_ys, &hip_thetas, cfg);
@@ -549,6 +673,34 @@ fn build_solution(x: &[f64], cost: f64, success: bool, cfg: &Config) -> Solution
         } else {
             None
         },
+    }
+}
+
+fn compute_quality(wheel_xs: &[f64], wheel_ys: &[f64], crossing: bool) -> Quality {
+    if wheel_xs.is_empty() || wheel_ys.is_empty() {
+        return Quality {
+            crossing,
+            ..Quality::default()
+        };
+    }
+
+    let n_wheels = wheel_xs.len() as f64;
+    let mean_wx = wheel_xs.iter().sum::<f64>() / n_wheels;
+    let rms_wx =
+        (wheel_xs.iter().map(|x| (x - mean_wx).powi(2)).sum::<f64>() / n_wheels).sqrt();
+    let max_wx = wheel_xs.iter().map(|x| x.abs()).fold(0.0, f64::max);
+    let x_min = wheel_xs.iter().copied().fold(f64::INFINITY, f64::min);
+    let x_max = wheel_xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let y_min = wheel_ys.iter().copied().fold(f64::INFINITY, f64::min);
+    let y_max = wheel_ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+    Quality {
+        max_wheel_x: max_wx,
+        wheel_x_pp: x_max - x_min,
+        wheel_x_rms: rms_wx,
+        wheel_y_span: y_max - y_min,
+        mean_wheel_x: mean_wx,
+        crossing,
     }
 }
 

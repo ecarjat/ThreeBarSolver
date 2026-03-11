@@ -1,5 +1,6 @@
 use crate::app::state::AppState;
-use crate::optimization::solver::solve;
+use crate::optimization::solver::{evaluate_custom_geometry, solve};
+use crate::types::{Lengths, PinJointLocation};
 use egui::{DragValue, Ui};
 
 /// Render the sidebar with all configuration controls
@@ -445,6 +446,117 @@ pub fn render_sidebar(ui: &mut Ui, state: &mut AppState) {
                 .checkbox(&mut state.config.use_global_opt, "Use global optimization")
                 .on_hover_text("Use Differential Evolution instead of multi-start. Better for complex problems but slower")
                 .changed();
+        });
+
+        ui.collapsing("Custom Geometry", |ui| {
+            ui.label("Evaluate manually entered geometry without optimization.");
+
+            ui.horizontal(|ui| {
+                ui.label("Lu (H-K, mm):");
+                ui.add(
+                    DragValue::new(&mut state.custom_upper_leg_hk_mm)
+                        .speed(1.0)
+                        .range(1.0..=1500.0),
+                );
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Lkw (K-W, mm):");
+                ui.add(
+                    DragValue::new(&mut state.custom_lower_leg_kw_mm)
+                        .speed(1.0)
+                        .range(1.0..=1500.0),
+                );
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Lkc (K-C, mm):");
+                ui.add(
+                    DragValue::new(&mut state.custom_inner_joint_kc_mm)
+                        .speed(1.0)
+                        .range(1.0..=500.0),
+                );
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Lc (Bc-C, mm):");
+                ui.add(
+                    DragValue::new(&mut state.custom_link_bc_c_mm)
+                        .speed(1.0)
+                        .range(1.0..=1500.0),
+                );
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Bc X (mm):");
+                ui.add(
+                    DragValue::new(&mut state.custom_pin_x_mm)
+                        .speed(1.0)
+                        .range(-1000.0..=1000.0),
+                );
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Bc Y (mm, +up):")
+                    .on_hover_text("Displayed with +Y up. Internal solver uses +Y down.");
+                ui.add(
+                    DragValue::new(&mut state.custom_pin_y_mm)
+                        .speed(1.0)
+                        .range(-1000.0..=1000.0),
+                );
+            });
+
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(state.solution.is_some(), |ui| {
+                    if ui
+                        .button("Load from current solution")
+                        .on_hover_text("Copy currently displayed geometry into custom fields")
+                        .clicked()
+                    {
+                        state.load_custom_geometry_from_solution();
+                    }
+                });
+
+                if ui
+                    .button("Evaluate custom")
+                    .on_hover_text("Compute poses/metrics/trace from custom geometry")
+                    .clicked()
+                {
+                    state.sync_config_from_ui();
+                    state.solver_error = None;
+                    state.save_message = None;
+                    state.is_solving = true;
+
+                    let lengths = Lengths {
+                        upper_leg_hk: state.custom_upper_leg_hk_mm / 1000.0,
+                        lower_leg_kw: state.custom_lower_leg_kw_mm / 1000.0,
+                        link_bc_c: state.custom_link_bc_c_mm / 1000.0,
+                    };
+                    let pin_joint = PinJointLocation {
+                        x: state.custom_pin_x_mm / 1000.0,
+                        y: -state.custom_pin_y_mm / 1000.0,
+                    };
+                    let inner_joint_offset_kc = state.custom_inner_joint_kc_mm / 1000.0;
+
+                    match evaluate_custom_geometry(
+                        &state.config,
+                        lengths,
+                        pin_joint,
+                        inner_joint_offset_kc,
+                    ) {
+                        Ok(solution) => {
+                            state.solution = Some(solution);
+                            state.current_pose_ratio = 0.0;
+                            state.invalidate_pose_cache();
+                        }
+                        Err(e) => {
+                            state.solver_error = Some(e);
+                        }
+                    }
+
+                    state.is_solving = false;
+                }
+            });
         });
 
         ui.separator();

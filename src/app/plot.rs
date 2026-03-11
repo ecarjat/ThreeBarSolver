@@ -9,7 +9,7 @@ use std::env;
 /// Render the linkage visualization plot
 pub fn render_linkage_plot(ui: &mut Ui, state: &mut AppState) {
     if state.solution.is_none() {
-        ui.label("Solve design first to view linkage.");
+        ui.label("Solve design or evaluate custom geometry first to view linkage.");
         return;
     }
 
